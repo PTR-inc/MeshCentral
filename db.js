@@ -34,8 +34,8 @@ module.exports.CreateDB = function (parent, func) {
     const common = require('./common.js');
     const path = require('path');
     const fs = require('fs');
-    const DB_NEDB = 1, DB_MONGOJS = 2, DB_MONGODB = 3,DB_MARIADB = 4, DB_MYSQL = 5, DB_POSTGRESQL = 6, DB_ACEBASE = 7, DB_SQLITE = 8, DB_BETTER_SQLITE3 = 9;
-    const DB_LIST = ['None', 'NeDB', 'MongoJS', 'MongoDB', 'MariaDB', 'MySQL', 'PostgreSQL', 'AceBase', 'SQLite', 'Better-sqlite3'];  //for the info command
+    const DB_NEDB = 1, DB_MONGOJS = 2, DB_MONGODB = 3,DB_MARIADB = 4, DB_MYSQL = 5, DB_POSTGRESQL = 6, DB_ACEBASE = 7, DB_SQLITE = 8;
+    const DB_LIST = ['None', 'NeDB', 'MongoJS', 'MongoDB', 'MariaDB', 'MySQL', 'PostgreSQL', 'AceBase', 'SQLite'];  //for the info command
     let databaseName = 'meshcentral';
     let datapathParentPath = path.dirname(parent.datapath);
     let datapathFoldername = path.basename(parent.datapath);
@@ -49,6 +49,7 @@ module.exports.CreateDB = function (parent, func) {
         journalMode: 'delete',
         journalSize: 4096000,
         synchronous: 'full',
+        useBetterSQLite3: false
     };
     obj.performingBackup = false;
     const BACKUPFAIL_ZIPCREATE = 0x0001;
@@ -761,13 +762,10 @@ module.exports.CreateDB = function (parent, func) {
 
     if (parent.args.sqlite3) {
         // SQLite3 database setup
+        obj.databaseType = DB_SQLITE;
         let configParams = parent.config.settings.sqlite3;
         const sqlite3 = configParams.usebettersqlite3 ? require('better-sqlite3') : require('sqlite3');
-        if (configParams.usebettersqlite3) {
-            obj.databaseType = DB_BETTER_SQLITE3;
-        } else {
-            obj.databaseType = DB_SQLITE;
-        }
+        obj.sqliteConfig.useBetterSQLite3 = configParams.usebettersqlite3;
         if (typeof configParams == 'string') {databaseName = configParams} else {databaseName = configParams.name ? configParams.name : 'meshcentral';};
         obj.sqliteConfig.startupVacuum = configParams.startupvacuum ? configParams.startupvacuum : false;
         obj.sqliteConfig.autoVacuum = configParams.autovacuum ? configParams.autovacuum.toLowerCase() : 'incremental';
@@ -785,7 +783,7 @@ module.exports.CreateDB = function (parent, func) {
         parent.debug('db', 'SQlite config options: ' + JSON.stringify(obj.sqliteConfig, null, 4));
         if (obj.sqliteConfig.journalMode == 'memory') { parent.addServerWarning("[WARNING] journal_mode=memory: this can lead to database corruption if there is a crash during a transaction. See https://www.sqlite.org/pragma.html#pragma_journal_mode") };
         
-        if (obj.databaseType == DB_BETTER_SQLITE3) {
+        if (obj.sqliteConfig.useBetterSQLite3) {
             obj.file = new sqlite3(parent.path.join(parent.datapath, databaseName + '.sqlite'), { verbose: console.log });
             //const stmt = obj.file.prepare(`SELECT 1 FROM sqlite_master WHERE type="table" AND name="main";`);
             //if (stmt.get()) {
@@ -1351,7 +1349,7 @@ module.exports.CreateDB = function (parent, func) {
     }
 
     function sqliteSetOptions(func) {
-        if (obj.databaseType == DB_BETTER_SQLITE3) {
+        if (obj.sqliteConfig.useBetterSQLite3) {
             let current_auto_vacuum = obj.file.pragma('auto_vacuum', { simple: true });
             obj.file.pragma('journal_mode=' + obj.sqliteConfig.journalMode);
             obj.file.pragma('synchronous='+ obj.sqliteConfig.synchronous);
@@ -1446,47 +1444,49 @@ module.exports.CreateDB = function (parent, func) {
 
     // Query the database
     function sqlDbQuery(query, args, func, debug) {
-        if (obj.databaseType == DB_BETTER_SQLITE3) { // Better-sqlite
+        if (obj.databaseType == DB_SQLITE) { // SQLite
             if (args == null) { args = []; };
-            let err;
-            let args_obj = {};
-            for (let i = 0; i < args.length; i++) {
-                args_obj[(i+1)]=args[i];
-                //copyItems.push(args[i]);
-              }
-            let stmt = obj.file.prepare(query);
-            let docs;
-            if ((query.slice(0,3)).toLowerCase()== 'sel'){
-                docs = stmt.all(args_obj);
-            } else {
-                docs = stmt.run(args_obj);
-            }
-            
-            if (docs != null) {
-                   for (var i in docs) {
-                       if (typeof docs[i].doc == 'string') {
-                           try { docs[i] = JSON.parse(docs[i].doc); } catch (ex) {
-                               console.log(query, args, docs[i]);
-                            }
-                        }
-                    }
+            if (obj.sqliteConfig.useBetterSQLite3) {
+                let args_obj = {};
+                for (let i = 0; i < args.length; i++) {
+                    args_obj[(i+1)]=args[i];
+                    //copyItems.push(args[i]);
                 }
-            if (func) { func(err, docs); };
-        } else if (obj.databaseType == DB_SQLITE) { // SQLite
-            if (args == null) { args = []; }
-            obj.file.all(query, args, function (err, docs) {
-                if (err != null) { console.log(query, args, err, docs); }
+                let stmt = obj.file.prepare(query);
+                let docs;
+                if ((query.slice(0,3)).toUpperCase()== 'SEL'){
+                    //SELECT statement
+                    docs = stmt.all(args_obj);
+                } else {
+                    //INSERT, UPDATE, DELETE statement
+                    docs = stmt.run(args_obj);
+                }
+                
                 if (docs != null) {
                     for (var i in docs) {
                         if (typeof docs[i].doc == 'string') {
                             try { docs[i] = JSON.parse(docs[i].doc); } catch (ex) {
                                 console.log(query, args, docs[i]);
+                                }
                             }
                         }
                     }
-                }
-                if (func) { func(err, docs); }
-            });
+                if (func) { func(null, docs); };
+            } else {
+                obj.file.all(query, args, function (err, docs) {
+                    if (err != null) { console.log(query, args, err, docs); }
+                    if (docs != null) {
+                        for (var i in docs) {
+                            if (typeof docs[i].doc == 'string') {
+                                try { docs[i] = JSON.parse(docs[i].doc); } catch (ex) {
+                                    console.log(query, args, docs[i]);
+                                }
+                            }
+                        }
+                    }
+                    if (func) { func(err, docs); }
+                })
+        };
         } else if (obj.databaseType == DB_MARIADB) { // MariaDB
             Datastore.getConnection()
                 .then(function (conn) {
@@ -1604,7 +1604,7 @@ module.exports.CreateDB = function (parent, func) {
     }
 
     function setupFunctions(func) {
-        if ((obj.databaseType == DB_SQLITE) || (obj.databaseType == DB_BETTER_SQLITE3)) {
+        if (obj.databaseType == DB_SQLITE) {
             // Database actions on the main collection. SQLite3: https://www.linode.com/docs/guides/getting-started-with-nodejs-sqlite/
             obj.Set = function (value, func) {
                 obj.dbCounters.fileSet++;
