@@ -127,6 +127,11 @@
               "type": "boolean",
               "default": false,
               "description": "Do a full VACUUM at startup. Shrinks the db file and optimizes it. This can take some time with a large database and can temporarily take up to double the database size on disk. See: https://www.sqlite.org/lang_vacuum.html"
+            },
+            "useBetterSqlite3": {
+              "type": "boolean",
+              "default": false,
+              "description": "Use 'better-sqlite3' instead of the default 'sqlite3' driver. Much more performant"
             }
           }
         },

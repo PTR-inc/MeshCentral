@@ -34,8 +34,8 @@ module.exports.CreateDB = function (parent, func) {
     const common = require('./common.js');
     const path = require('path');
     const fs = require('fs');
-    const DB_NEDB = 1, DB_MONGOJS = 2, DB_MONGODB = 3,DB_MARIADB = 4, DB_MYSQL = 5, DB_POSTGRESQL = 6, DB_ACEBASE = 7, DB_SQLITE = 8;
-    const DB_LIST = ['None', 'NeDB', 'MongoJS', 'MongoDB', 'MariaDB', 'MySQL', 'PostgreSQL', 'AceBase', 'SQLite'];  //for the info command
+    const DB_NEDB = 1, DB_MONGOJS = 2, DB_MONGODB = 3,DB_MARIADB = 4, DB_MYSQL = 5, DB_POSTGRESQL = 6, DB_ACEBASE = 7, DB_SQLITE = 8, DB_BETTER_SQLITE3 = 9;
+    const DB_LIST = ['None', 'NeDB', 'MongoJS', 'MongoDB', 'MariaDB', 'MySQL', 'PostgreSQL', 'AceBase', 'SQLite', 'Better-sqlite3'];  //for the info command
     let databaseName = 'meshcentral';
     let datapathParentPath = path.dirname(parent.datapath);
     let datapathFoldername = path.basename(parent.datapath);
@@ -761,9 +761,13 @@ module.exports.CreateDB = function (parent, func) {
 
     if (parent.args.sqlite3) {
         // SQLite3 database setup
-        obj.databaseType = DB_SQLITE;
-        const sqlite3 = require('sqlite3');
         let configParams = parent.config.settings.sqlite3;
+        const sqlite3 = configParams.usebettersqlite3 ? require('better-sqlite3') : require('sqlite3');
+        if (configParams.usebettersqlite3) {
+            obj.databaseType = DB_BETTER_SQLITE3;
+        } else {
+            obj.databaseType = DB_SQLITE;
+        }
         if (typeof configParams == 'string') {databaseName = configParams} else {databaseName = configParams.name ? configParams.name : 'meshcentral';};
         obj.sqliteConfig.startupVacuum = configParams.startupvacuum ? configParams.startupvacuum : false;
         obj.sqliteConfig.autoVacuum = configParams.autovacuum ? configParams.autovacuum.toLowerCase() : 'incremental';
@@ -779,49 +783,86 @@ module.exports.CreateDB = function (parent, func) {
         obj.sqliteConfig.maintenance += 'PRAGMA optimize;';
         
         parent.debug('db', 'SQlite config options: ' + JSON.stringify(obj.sqliteConfig, null, 4));
-        if (obj.sqliteConfig.journalMode == 'memory') { console.log('[WARNING] journal_mode=memory: this can lead to database corruption if there is a crash during a transaction. See https://www.sqlite.org/pragma.html#pragma_journal_mode') };
-        //.cached not usefull
-        obj.file = new sqlite3.Database(parent.path.join(parent.datapath, databaseName + '.sqlite'), sqlite3.OPEN_READWRITE, function (err) {
-            if (err && (err.code == 'SQLITE_CANTOPEN')) {
-                // Database needs to be created
-                obj.file = new sqlite3.Database(parent.path.join(parent.datapath, databaseName + '.sqlite'), function (err) {
-                    if (err) { console.log("SQLite Error: " + err); process.exit(1); }
-                    obj.file.exec(`
-                        CREATE TABLE main (id VARCHAR(256) PRIMARY KEY NOT NULL, type CHAR(32), domain CHAR(64), extra CHAR(255), extraex CHAR(255), doc JSON);
-                        CREATE TABLE events(id INTEGER PRIMARY KEY, time TIMESTAMP, domain CHAR(64), action CHAR(255), nodeid CHAR(255), userid CHAR(255), doc JSON);
-                        CREATE TABLE eventids(fkid INT NOT NULL, target CHAR(255), CONSTRAINT fk_eventid FOREIGN KEY (fkid) REFERENCES events (id) ON DELETE CASCADE ON UPDATE RESTRICT);
-                        CREATE TABLE serverstats (time TIMESTAMP PRIMARY KEY, expire TIMESTAMP, doc JSON);
-                        CREATE TABLE power (id INTEGER PRIMARY KEY, time TIMESTAMP, nodeid CHAR(255), doc JSON);
-                        CREATE TABLE smbios (id CHAR(255) PRIMARY KEY, time TIMESTAMP, expire TIMESTAMP, doc JSON);
-                        CREATE TABLE plugin (id INTEGER PRIMARY KEY, doc JSON);
-                        CREATE INDEX ndxtypedomainextra ON main (type, domain, extra);
-                        CREATE INDEX ndxextra ON main (extra);
-                        CREATE INDEX ndxextraex ON main (extraex);
-                        CREATE INDEX ndxeventstime ON events(time);
-                        CREATE INDEX ndxeventsusername ON events(domain, userid, time);
-                        CREATE INDEX ndxeventsdomainnodeidtime ON events(domain, nodeid, time);
-                        CREATE INDEX ndxeventids ON eventids(target);
-                        CREATE INDEX ndxserverstattime ON serverstats (time);
-                        CREATE INDEX ndxserverstatexpire ON serverstats (expire);
-                        CREATE INDEX ndxpowernodeidtime ON power (nodeid, time);
-                        CREATE INDEX ndxsmbiostime ON smbios (time);
-                        CREATE INDEX ndxsmbiosexpire ON smbios (expire);
-                        `, function (err) {
-                            // Completed DB creation of SQLite3
-                            sqliteSetOptions(func);
-                            //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
-                            setupFunctions(func);
-                        }
-                    );
-                });
-                return;
-            } else if (err) { console.log("SQLite Error: " + err); process.exit(0); }
+        if (obj.sqliteConfig.journalMode == 'memory') { parent.addServerWarning("[WARNING] journal_mode=memory: this can lead to database corruption if there is a crash during a transaction. See https://www.sqlite.org/pragma.html#pragma_journal_mode") };
+        
+        if (obj.databaseType == DB_BETTER_SQLITE3) {
+            obj.file = new sqlite3(parent.path.join(parent.datapath, databaseName + '.sqlite'), { verbose: console.log });
+            //const stmt = obj.file.prepare(`SELECT 1 FROM sqlite_master WHERE type="table" AND name="main";`);
+            //if (stmt.get()) {
+                //db exists
+            //} else {
+                obj.file.exec(`
+                    CREATE TABLE if not exists main (id VARCHAR(256) PRIMARY KEY NOT NULL, type CHAR(32), domain CHAR(64), extra CHAR(255), extraex CHAR(255), doc JSON);
+                    CREATE TABLE if not exists events(id INTEGER, time TIMESTAMP, domain CHAR(64), action CHAR(255), nodeid CHAR(255), userid CHAR(255), doc JSON, PRIMARY KEY("id" AUTOINCREMENT));
+                    CREATE TABLE if not exists eventids(fkid INT NOT NULL, target CHAR(255), CONSTRAINT fk_eventid FOREIGN KEY (fkid) REFERENCES events (id) ON DELETE CASCADE ON UPDATE RESTRICT);
+                    CREATE TABLE if not exists serverstats (time TIMESTAMP PRIMARY KEY, expire TIMESTAMP, doc JSON);
+                    CREATE TABLE if not exists power (id INTEGER, time TIMESTAMP, nodeid CHAR(255), doc JSON, PRIMARY KEY("id" AUTOINCREMENT));
+                    CREATE TABLE if not exists smbios (id CHAR(255) PRIMARY KEY, time TIMESTAMP, expire TIMESTAMP, doc JSON);
+                    CREATE TABLE if not exists plugin (id INTEGER PRIMARY KEY, doc JSON);
+                    CREATE INDEX if not exists ndxtypedomainextra ON main (type, domain, extra);
+                    CREATE INDEX if not exists ndxextra ON main (extra);
+                    CREATE INDEX if not exists ndxextraex ON main (extraex);
+                    CREATE INDEX if not exists ndxeventstime ON events(time);
+                    CREATE INDEX if not exists ndxeventsusername ON events(domain, userid, time);
+                    CREATE INDEX if not exists ndxeventsdomainnodeidtime ON events(domain, nodeid, time);
+                    CREATE INDEX if not exists ndxeventids ON eventids(target);
+                    CREATE INDEX if not exists ndxserverstattime ON serverstats (time);
+                    CREATE INDEX if not exists ndxserverstatexpire ON serverstats (expire);
+                    CREATE INDEX if not exists ndxpowernodeidtime ON power (nodeid, time);
+                    CREATE INDEX if not exists ndxsmbiostime ON smbios (time);
+                    CREATE INDEX if not exists ndxsmbiosexpire ON smbios (expire);
+                    `);
+                    // Completed DB creation of SQLite3
+                    sqliteSetOptions(func);
+                    //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
+                    setupFunctions(func);
+                    obj.Get();
 
-            //for existing db's
-            sqliteSetOptions();
-            //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
-            setupFunctions(func);
-        });
+            //}
+            console.log();
+        } else {
+            obj.file = new sqlite3.Database(parent.path.join(parent.datapath, databaseName + '.sqlite'), sqlite3.OPEN_READWRITE, function (err) {
+                if (err && (err.code == 'SQLITE_CANTOPEN')) {
+                    // Database needs to be created
+                    obj.file = new sqlite3.Database(parent.path.join(parent.datapath, databaseName + '.sqlite'), function (err) {
+                        if (err) { console.log("SQLite Error: " + err); process.exit(1); }
+                        obj.file.exec(`
+                            CREATE TABLE main (id VARCHAR(256) PRIMARY KEY NOT NULL, type CHAR(32), domain CHAR(64), extra CHAR(255), extraex CHAR(255), doc JSON);
+                            CREATE TABLE events(id INTEGER, time TIMESTAMP, domain CHAR(64), action CHAR(255), nodeid CHAR(255), userid CHAR(255), doc JSON), PRIMARY KEY("id" AUTOINCREMENT));
+                            CREATE TABLE eventids(fkid INT NOT NULL, target CHAR(255), CONSTRAINT fk_eventid FOREIGN KEY (fkid) REFERENCES events (id) ON DELETE CASCADE ON UPDATE RESTRICT);
+                            CREATE TABLE serverstats (time TIMESTAMP PRIMARY KEY, expire TIMESTAMP, doc JSON);
+                            CREATE TABLE power (id INTEGER, time TIMESTAMP, nodeid CHAR(255), doc JSON, PRIMARY KEY("id" AUTOINCREMENT));
+                            CREATE TABLE smbios (id CHAR(255) PRIMARY KEY, time TIMESTAMP, expire TIMESTAMP, doc JSON);
+                            CREATE TABLE plugin (id INTEGER PRIMARY KEY, doc JSON);
+                            CREATE INDEX ndxtypedomainextra ON main (type, domain, extra);
+                            CREATE INDEX ndxextra ON main (extra);
+                            CREATE INDEX ndxextraex ON main (extraex);
+                            CREATE INDEX ndxeventstime ON events(time);
+                            CREATE INDEX ndxeventsusername ON events(domain, userid, time);
+                            CREATE INDEX ndxeventsdomainnodeidtime ON events(domain, nodeid, time);
+                            CREATE INDEX ndxeventids ON eventids(target);
+                            CREATE INDEX ndxserverstattime ON serverstats (time);
+                            CREATE INDEX ndxserverstatexpire ON serverstats (expire);
+                            CREATE INDEX ndxpowernodeidtime ON power (nodeid, time);
+                            CREATE INDEX ndxsmbiostime ON smbios (time);
+                            CREATE INDEX ndxsmbiosexpire ON smbios (expire);
+                            `, function (err) {
+                                // Completed DB creation of SQLite3
+                                sqliteSetOptions(func);
+                                //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
+                                setupFunctions(func);
+                            }
+                        );
+                    });
+                    return;
+                } else if (err) { console.log("SQLite Error: " + err); process.exit(0); }
+
+                //for existing db's
+                sqliteSetOptions();
+                //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
+                setupFunctions(func);
+            })
+        };
     } else if (parent.args.acebase) {
         // AceBase database setup
         obj.databaseType = DB_ACEBASE;
@@ -1310,31 +1351,47 @@ module.exports.CreateDB = function (parent, func) {
     }
 
     function sqliteSetOptions(func) {
-        //get current auto_vacuum mode for comparison
-        obj.file.get('PRAGMA auto_vacuum;', function(err, current){
-            let pragma = 'PRAGMA journal_mode=' + obj.sqliteConfig.journalMode + ';' + 
-                'PRAGMA synchronous='+ obj.sqliteConfig.synchronous + ';' +
-                'PRAGMA journal_size_limit=' + obj.sqliteConfig.journalSize + ';' +
-                'PRAGMA auto_vacuum=' + obj.sqliteConfig.autoVacuum + ';' +
-                'PRAGMA incremental_vacuum=' + obj.sqliteConfig.incrementalVacuum + ';' +
-                'PRAGMA optimize=0x10002;';
-            //check new autovacuum mode, if changing from or to 'none', a VACUUM needs to be done to activate it. See https://www.sqlite.org/pragma.html#pragma_auto_vacuum
+        if (obj.databaseType == DB_BETTER_SQLITE3) {
+            let current_auto_vacuum = obj.file.pragma('auto_vacuum', { simple: true });
+            obj.file.pragma('journal_mode=' + obj.sqliteConfig.journalMode);
+            obj.file.pragma('synchronous='+ obj.sqliteConfig.synchronous);
+            obj.file.pragma('journal_size_limit=' + obj.sqliteConfig.journalSize);
+            obj.file.pragma('auto_vacuum=' + obj.sqliteConfig.autoVacuum);
+            obj.file.pragma('incremental_vacuum=' + obj.sqliteConfig.incrementalVacuum);
+            obj.file.pragma('optimize=0x10002');
             if ( obj.sqliteConfig.startupVacuum
-                || (current.auto_vacuum == 0 && obj.sqliteConfig.autoVacuum !='none')
-                || (current.auto_vacuum != 0 && obj.sqliteConfig.autoVacuum =='none'))
+                || (current_auto_vacuum == 0 && obj.sqliteConfig.autoVacuum !='none')
+                || (current_auto_vacuum != 0 && obj.sqliteConfig.autoVacuum =='none'))
                 {
-                    pragma += 'VACUUM;';
+                    obj.file.pragma('VACUUM');
                 };
-            parent.debug ('db', 'Config statement: ' + pragma);
-            
-            obj.file.exec( pragma,
-                function (err) {
-                if (err) { parent.debug('db', 'Config pragma error: ' + (err.message)) };
-                sqliteGetPragmas(['journal_mode', 'journal_size_limit', 'freelist_count', 'auto_vacuum', 'page_size', 'wal_autocheckpoint', 'synchronous'], function (pragma, pragmaValue) {
-                    parent.debug('db', 'PRAGMA: ' + pragma + '=' + pragmaValue);
+        } else {
+            //get current auto_vacuum mode for comparison
+            obj.file.get('PRAGMA auto_vacuum;', function(err, current){
+                let pragma = 'PRAGMA journal_mode=' + obj.sqliteConfig.journalMode + ';' + 
+                    'PRAGMA synchronous='+ obj.sqliteConfig.synchronous + ';' +
+                    'PRAGMA journal_size_limit=' + obj.sqliteConfig.journalSize + ';' +
+                    'PRAGMA auto_vacuum=' + obj.sqliteConfig.autoVacuum + ';' +
+                    'PRAGMA incremental_vacuum=' + obj.sqliteConfig.incrementalVacuum + ';' +
+                    'PRAGMA optimize=0x10002;';
+                //check new autovacuum mode, if changing from or to 'none', a VACUUM needs to be done to activate it. See https://www.sqlite.org/pragma.html#pragma_auto_vacuum
+                if ( obj.sqliteConfig.startupVacuum
+                    || (current.auto_vacuum == 0 && obj.sqliteConfig.autoVacuum !='none')
+                    || (current.auto_vacuum != 0 && obj.sqliteConfig.autoVacuum =='none'))
+                    {
+                        pragma += 'VACUUM;';
+                    };
+                parent.debug ('db', 'Config statement: ' + pragma);
+                
+                obj.file.exec( pragma,
+                    function (err) {
+                    if (err) { parent.debug('db', 'Config pragma error: ' + (err.message)) };
+                    sqliteGetPragmas(['journal_mode', 'journal_size_limit', 'freelist_count', 'auto_vacuum', 'page_size', 'wal_autocheckpoint', 'synchronous'], function (pragma, pragmaValue) {
+                        parent.debug('db', 'PRAGMA: ' + pragma + '=' + pragmaValue);
+                    });
                 });
             });
-        });
+        };
         //setupFunctions(func);
     }
 
@@ -1389,7 +1446,33 @@ module.exports.CreateDB = function (parent, func) {
 
     // Query the database
     function sqlDbQuery(query, args, func, debug) {
-        if (obj.databaseType == DB_SQLITE) { // SQLite
+        if (obj.databaseType == DB_BETTER_SQLITE3) { // Better-sqlite
+            if (args == null) { args = []; };
+            let err;
+            let args_obj = {};
+            for (let i = 0; i < args.length; i++) {
+                args_obj[(i+1)]=args[i];
+                //copyItems.push(args[i]);
+              }
+            let stmt = obj.file.prepare(query);
+            let docs;
+            if ((query.slice(0,3)).toLowerCase()== 'sel'){
+                docs = stmt.all(args_obj);
+            } else {
+                docs = stmt.run(args_obj);
+            }
+            
+            if (docs != null) {
+                   for (var i in docs) {
+                       if (typeof docs[i].doc == 'string') {
+                           try { docs[i] = JSON.parse(docs[i].doc); } catch (ex) {
+                               console.log(query, args, docs[i]);
+                            }
+                        }
+                    }
+                }
+            if (func) { func(err, docs); };
+        } else if (obj.databaseType == DB_SQLITE) { // SQLite
             if (args == null) { args = []; }
             obj.file.all(query, args, function (err, docs) {
                 if (err != null) { console.log(query, args, err, docs); }
@@ -1521,7 +1604,7 @@ module.exports.CreateDB = function (parent, func) {
     }
 
     function setupFunctions(func) {
-        if (obj.databaseType == DB_SQLITE) {
+        if ((obj.databaseType == DB_SQLITE) || (obj.databaseType == DB_BETTER_SQLITE3)) {
             // Database actions on the main collection. SQLite3: https://www.linode.com/docs/guides/getting-started-with-nodejs-sqlite/
             obj.Set = function (value, func) {
                 obj.dbCounters.fileSet++;
