@@ -814,7 +814,6 @@ module.exports.CreateDB = function (parent, func) {
                     sqliteSetOptions(func);
                     //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
                     setupFunctions(func);
-                    obj.Get();
 
             //}
             console.log();
@@ -1448,9 +1447,17 @@ module.exports.CreateDB = function (parent, func) {
             if (args == null) { args = []; };
             if (obj.sqliteConfig.useBetterSQLite3) {
                 let args_obj = {};
-                for (let i = 0; i < args.length; i++) {
-                    args_obj[(i+1)]=args[i];
-                    //copyItems.push(args[i]);
+                let ts = '';
+                if (args.length){
+                    for (let i = 0; i < args.length; i++) {
+                        if (typeof args[i] === 'object' && args[i] !== null){
+                            args_obj[(i+1)]=args[i].toString();
+                            ts = (Date.parse( (args_obj[(i+1)]=args[i].toString()) ));
+                            if (!isNaN(ts)) {args_obj[(i+1)]=ts};
+                        } else {
+                            args_obj[(i+1)]=args[i];
+                        }
+                    }
                 }
                 let stmt = obj.file.prepare(query);
                 let docs;
@@ -1460,7 +1467,7 @@ module.exports.CreateDB = function (parent, func) {
                 } else {
                     //INSERT, UPDATE, DELETE statement
                     docs = stmt.run(args_obj);
-                }
+                };
                 
                 if (docs != null) {
                     for (var i in docs) {
