@@ -550,10 +550,7 @@ module.exports.CreateDB = function (parent, func) {
         } else if (obj.databaseType == DB_POSTGRESQL) {
             // PostgreSQL
             // TODO
-        } else if (obj.databaseType == DB_MYSQL) {
-            // MySQL
-            // TODO
-        } else if (obj.databaseType == DB_MARIADB) {
+        } else if ((obj.databaseType == DB_MARIADB) || (obj.databaseType == DB_MYSQL)) {
             // MariaDB
             // TODO
         } else if (obj.databaseType == DB_MONGODB) {
@@ -847,6 +844,7 @@ module.exports.CreateDB = function (parent, func) {
             setupFunctions(func);
         });
     } else if (parent.args.mariadb || parent.args.mysql) {
+        obj.databaseType = parent.args.mariadb ? DB_MARIADB : DB_MYSQL;
         var connectinArgs = (parent.args.mariadb) ? parent.args.mariadb : parent.args.mysql;
         if (typeof connectinArgs == 'string') {
             const parts = connectinArgs.split(/[:@/]+/);
@@ -878,34 +876,18 @@ module.exports.CreateDB = function (parent, func) {
             }
         }
 
-        if (parent.args.mariadb) {
-            // Use MariaDB
-            obj.databaseType = DB_MARIADB;
-            var tempDatastore = require('mariadb').createPool(connectionObject);
-            tempDatastore.getConnection().then(function (conn) {
-                conn.query('CREATE DATABASE IF NOT EXISTS ' + dbname).then(function (result) {
-                    conn.release();
-                }).catch(function (ex) { console.log('Auto-create database failed: ' + ex); });
+        var tempDatastore = require('mariadb').createPool(connectionObject);
+        tempDatastore.getConnection().then(function (conn) {
+            conn.query('CREATE DATABASE IF NOT EXISTS ' + dbname).then(function (result) {
+                conn.release();
             }).catch(function (ex) { console.log('Auto-create database failed: ' + ex); });
-            setTimeout(function () { tempDatastore.end(); }, 2000);
+        }).catch(function (ex) { console.log('Auto-create database failed: ' + ex); });
+        setTimeout(function () { tempDatastore.end(); }, 5000);
 
-            connectionObject.database = dbname;
-            Datastore = require('mariadb').createPool(connectionObject);
-            createTablesIfNotExist(dbname);
-        } else if (parent.args.mysql) {
-            // Use MySQL
-            obj.databaseType = DB_MYSQL;
-            var tempDatastore = require('mysql2').createPool(connectionObject);
-            tempDatastore.query('CREATE DATABASE IF NOT EXISTS ' + dbname, function (error) {
-                if (error != null) {
-                    console.log('Auto-create database failed: ' + error);
-                }
-                connectionObject.database = dbname;
-                Datastore = require('mysql2').createPool(connectionObject);
-                createTablesIfNotExist(dbname);
-            });
-            setTimeout(function () { tempDatastore.end(); }, 2000);
-        }
+        connectionObject.database = dbname;
+        Datastore = require('mariadb').createPool(connectionObject);
+        createTablesIfNotExist(dbname);
+
     } else if (parent.args.postgres) {
         // Postgres SQL
         let connectinArgs = parent.args.postgres;
@@ -1404,7 +1386,7 @@ module.exports.CreateDB = function (parent, func) {
                 }
                 if (func) { func(err, docs); }
             });
-        } else if (obj.databaseType == DB_MARIADB) { // MariaDB
+        } else if ((obj.databaseType == DB_MARIADB) || (obj.databaseType == DB_MYSQL)) { // MariaDB or MySQL
             Datastore.getConnection()
                 .then(function (conn) {
                     conn.query(query, args)
@@ -1423,27 +1405,6 @@ module.exports.CreateDB = function (parent, func) {
                         })
                         .catch(function (err) { conn.release(); if (func) try { func(err); } catch (ex) { console.log('SQLERR2', ex); } });
                 }).catch(function (err) { if (func) { try { func(err); } catch (ex) { console.log('SQLERR3', ex); } } });
-        } else if (obj.databaseType == DB_MYSQL) { // MySQL
-            Datastore.query(query, args, function (error, results, fields) {
-                if (error != null) {
-                    if (func) try { func(error); } catch (ex) { console.log('SQLERR4', ex); }
-                } else {
-                    var docs = [];
-                    for (var i in results) {
-                        if (results[i].doc) {
-                            if (typeof results[i].doc == 'string') {
-                                docs.push(JSON.parse(results[i].doc));
-                            } else {
-                                docs.push(results[i].doc);
-                            }
-                        } else if ((results.length == 1) && (results[i]['COUNT(doc)'] != null)) {
-                            // This is a SELECT COUNT() operation
-                            docs = results[i]['COUNT(doc)'];
-                        }
-                    }
-                    if (func) { try { func(null, docs); } catch (ex) { console.log('SQLERR5', ex); } }
-                }
-            });
         } else if (obj.databaseType == DB_POSTGRESQL) { // Postgres SQL
             Datastore.query(query, args, function (error, results) {
                 if (error != null) {
@@ -1473,7 +1434,7 @@ module.exports.CreateDB = function (parent, func) {
 
     // Exec on the database
     function sqlDbExec(query, args, func) {
-        if (obj.databaseType == DB_MARIADB) { // MariaDB
+        if ((obj.databaseType == DB_MARIADB) || ((obj.databaseType == DB_MYSQL))) { // MariaDB or MySQL
             Datastore.getConnection()
                 .then(function (conn) {
                     conn.query(query, args)
@@ -1483,7 +1444,7 @@ module.exports.CreateDB = function (parent, func) {
                         })
                         .catch(function (err) { conn.release(); if (func) try { func(err); } catch (ex) { console.log(ex); } });
                 }).catch(function (err) { if (func) { try { func(err); } catch (ex) { console.log(ex); } } });
-        } else if ((obj.databaseType == DB_MYSQL) || (obj.databaseType == DB_POSTGRESQL)) { // MySQL or Postgres SQL
+        } else if (obj.databaseType == DB_POSTGRESQL) { // Postgres SQL
             Datastore.query(query, args, function (error, results, fields) {
                 if (func) try { func(error, results ? results[0] : null); } catch (ex) { console.log(ex); }
             });
@@ -1492,7 +1453,7 @@ module.exports.CreateDB = function (parent, func) {
 
     // Execute a batch of commands on the database
     function sqlDbBatchExec(queries, func) {
-        if (obj.databaseType == DB_MARIADB) { // MariaDB
+        if ((obj.databaseType == DB_MARIADB) || (obj.databaseType == DB_MYSQL)) { // MariaDB or MySQL
             Datastore.getConnection()
                 .then(function (conn) {
                     var Promises = [];
@@ -1502,15 +1463,6 @@ module.exports.CreateDB = function (parent, func) {
                         .catch(function (err) { conn.release(); if (func) { try { func(err); } catch (ex) { console.log(ex); } } });
                 })
                 .catch(function (err) { if (func) { try { func(err); } catch (ex) { console.log(ex); } } });
-        } else if (obj.databaseType == DB_MYSQL) { // MySQL
-            Datastore.getConnection(function(err, connection) {
-                if (err) { if (func) { try { func(err); } catch (ex) { console.log(ex); } } return; }
-                var Promises = [];
-                for (var i in queries) { if (typeof queries[i] == 'string') { Promises.push(connection.promise().query(queries[i])); } else { Promises.push(connection.promise().query(queries[i][0], queries[i][1])); } }
-                Promise.all(Promises)
-                    .then(function (error, results, fields) { connection.release(); if (func) { try { func(error, results); } catch (ex) { console.log(ex); } } })
-                    .catch(function (error, results, fields) { connection.release(); if (func) { try { func(error); } catch (ex) { console.log(ex); } } });
-            });
         } else if (obj.databaseType == DB_POSTGRESQL) { // Postgres
             var Promises = [];
             for (var i in queries) { if (typeof queries[i] == 'string') { Promises.push(Datastore.query(queries[i])); } else { Promises.push(Datastore.query(queries[i][0], queries[i][1])); } }
@@ -3286,7 +3238,7 @@ module.exports.CreateDB = function (parent, func) {
 
         // SSL options different on mariadb/mysql
         var sslOptions = '';
-        if (obj.databaseType == DB_MARIADB) {
+            if (obj.databaseType == DB_MARIADB) {
             if (props.ssl) {
                 sslOptions = ' --ssl';
                 if (props.ssl.cacertpath) sslOptions = ' --ssl-ca=' + props.ssl.cacertpath;
