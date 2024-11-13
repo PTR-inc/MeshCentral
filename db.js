@@ -27,6 +27,64 @@
 //
 module.exports.CreateDB = function (parent, func) {
     var obj = {};
+/*
+    let test = { changes: 1, lastInsertRowid: 0, };
+    let t2 = 'select poep from 1234 returning id'
+//X.split(Y).pop();
+//str.split(' ')[0];
+
+let splitter = 'returning ';
+    let r = t2.split(splitter).pop().split(' ')[0];
+    let a;
+*/
+    //make bettersqlite async :(
+    const asyncBetterSQLite = (query, args) => {
+        return new Promise((resolve, reject) => {
+            let args_obj = {};
+            let ts = '';
+            if (args.length){
+                for (let i = 0; i < args.length; i++) {
+                    if (typeof args[i] === 'object' && args[i] !== null){
+                        args_obj[(i+1)]=args[i].toString();
+                        ts = (Date.parse( (args_obj[(i+1)]=args[i].toString()) ));
+                        if (!isNaN(ts)) {args_obj[(i+1)]=ts};
+                    } else {
+                        args_obj[(i+1)]=args[i];
+                    }
+                }
+            }
+            let stmt = obj.file.prepare(query);
+            let docs;
+            if ((query.slice(0,3)).toUpperCase()== 'SEL'|| (query.toUpperCase()).includes(' RETURNING ')) {
+                //data returning statements
+                docs = stmt.all(args_obj);
+                if (docs != null) {
+                    for (var i in docs) {
+                        if (typeof docs[i].doc == 'string') {
+                            try { docs[i] = JSON.parse(docs[i].doc); } catch (ex) {
+                                console.log(query, args, docs[i]);
+                                }
+                            }
+                        }
+                    }
+            } else {
+                //INSERT, UPDATE, DELETE statement
+                let res = stmt.run(args_obj);
+                //let return_id = query.split('RETURNING ').pop().split(' ')[0];
+                //docs = [{ return_id : docs.lastInsertedRowsid}];
+                // [{"id":8}]
+                docs = res;
+            };
+            
+            
+            //parent.debug('query', qn + ': result=' + JSON.stringify(docs));
+            //if (func) { func(null, docs); };
+            //if (err) reject(err);
+            return resolve(docs);
+        })
+    };
+
+    let queryCount=0;
     var Datastore = null;
     var expireEventsSeconds = (60 * 60 * 24 * 20);              // By default, expire events after 20 days (1728000). (Seconds * Minutes * Hours * Days)
     var expirePowerEventsSeconds = (60 * 60 * 24 * 10);         // By default, expire power events after 10 days (864000). (Seconds * Minutes * Hours * Days)
@@ -1441,44 +1499,20 @@ module.exports.CreateDB = function (parent, func) {
         }
     }
 
+
     // Query the database
     function sqlDbQuery(query, args, func, debug) {
+        queryCount +=1;
+        var qn=queryCount;
+        parent.debug('query', qn + ': ' + query + '; < ' + args)
         if (obj.databaseType == DB_SQLITE) { // SQLite
             if (args == null) { args = []; };
             if (obj.sqliteConfig.useBetterSQLite3) {
-                let args_obj = {};
-                let ts = '';
-                if (args.length){
-                    for (let i = 0; i < args.length; i++) {
-                        if (typeof args[i] === 'object' && args[i] !== null){
-                            args_obj[(i+1)]=args[i].toString();
-                            ts = (Date.parse( (args_obj[(i+1)]=args[i].toString()) ));
-                            if (!isNaN(ts)) {args_obj[(i+1)]=ts};
-                        } else {
-                            args_obj[(i+1)]=args[i];
-                        }
-                    }
-                }
-                let stmt = obj.file.prepare(query);
-                let docs;
-                if ((query.slice(0,3)).toUpperCase()== 'SEL'){
-                    //SELECT statement
-                    docs = stmt.all(args_obj);
-                } else {
-                    //INSERT, UPDATE, DELETE statement
-                    docs = stmt.run(args_obj);
-                };
-                
-                if (docs != null) {
-                    for (var i in docs) {
-                        if (typeof docs[i].doc == 'string') {
-                            try { docs[i] = JSON.parse(docs[i].doc); } catch (ex) {
-                                console.log(query, args, docs[i]);
-                                }
-                            }
-                        }
-                    }
-                if (func) { func(null, docs); };
+                //asyncBetterSQLite(query, args, func, qn);
+                asyncBetterSQLite(query, args).then (docs =>{
+                    parent.debug('query', qn + ': result=' + JSON.stringify(docs));
+                    if (func) { func(null, docs); }
+                }).catch(err => console.error(err));
             } else {
                 obj.file.all(query, args, function (err, docs) {
                     if (err != null) { console.log(query, args, err, docs); }
@@ -1491,6 +1525,7 @@ module.exports.CreateDB = function (parent, func) {
                             }
                         }
                     }
+                    parent.debug('query', qn + ': result=' + JSON.stringify(docs));
                     if (func) { func(err, docs); }
                 })
         };
@@ -4238,7 +4273,7 @@ module.exports.CreateDB = function (parent, func) {
 
     function dbMergeSqlArray(arr) {
         var x = '';
-        for (var i in arr) { if (x != '') { x += ','; } x += '"' + arr[i] + '"'; }
+        for (var i in arr) { if (x != '') { x += ','; } x += '\'' + arr[i] + '\''; }
         return x;
     }
 
