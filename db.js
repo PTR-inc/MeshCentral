@@ -39,6 +39,8 @@ module.exports.CreateDB = function (parent, func) {
     let databaseName = 'meshcentral';
     let datapathParentPath = path.dirname(parent.datapath);
     let datapathFoldername = path.basename(parent.datapath);
+    let mysqldumpPath = 'mysqldump';
+    let mysqldumpCommand;
     const SQLITE_AUTOVACUUM = ['none', 'full', 'incremental'];
     const SQLITE_SYNCHRONOUS = ['off', 'normal', 'full', 'extra'];
     obj.sqliteConfig = {
@@ -847,62 +849,89 @@ module.exports.CreateDB = function (parent, func) {
             setupFunctions(func);
         });
     } else if (parent.args.mariadb || parent.args.mysql) {
+        if (parent.config.settings.autobackup && parent.config.settings.autobackup.mysqldumppath) {
+            if (typeof parent.config.settings.autobackup.mysqldumppath != 'string') {
+                mysqldumpPath= '[ERROR] Bad mysqldump path';
+            } else { 
+            mysqldumpPath = path.resolve(parent.config.settings.autobackup.mysqldumppath);
+            };
+        };
+
         var connectinArgs = (parent.args.mariadb) ? parent.args.mariadb : parent.args.mysql;
+        // string not defined in schema, remove this? (format: 'mariadb://<user>:<password>@<host>:<port>/<db>', no ssl config possible)
         if (typeof connectinArgs == 'string') {
             const parts = connectinArgs.split(/[:@/]+/);
-            var connectionObject = {
+            var connectionArgs = {
                 "user": parts[1],
                 "password": parts[2],
                 "host": parts[3],
                 "port": parts[4],
                 "database": parts[5]
             };
-            var dbname = (connectionObject.database != null) ? connectionObject.database : 'meshcentral';
-        } else {
-            var dbname = (connectinArgs.database != null) ? connectinArgs.database : 'meshcentral';
+        }
+        
+        if (typeof connectinArgs.database == 'string') { databaseName = connectinArgs.database};
 
-            // Including the db name in the connection obj will cause a connection faliure if it does not exist
-            var connectionObject = Clone(connectinArgs);
-            delete connectionObject.database;
+        // Including the db name in the connection obj will cause a connection faliure if it does not exist
+        var connectionObject = Clone(connectinArgs);
+        delete connectionObject.database;
 
-            try {
-                if (connectinArgs.ssl) {
-                    if (connectinArgs.ssl.dontcheckserveridentity == true) { connectionObject.ssl.checkServerIdentity = function (name, cert) { return undefined; } };
-                    if (connectinArgs.ssl.cacertpath) { connectionObject.ssl.ca = [require('fs').readFileSync(connectinArgs.ssl.cacertpath, 'utf8')]; }
-                    if (connectinArgs.ssl.clientcertpath) { connectionObject.ssl.cert = [require('fs').readFileSync(connectinArgs.ssl.clientcertpath, 'utf8')]; }
-                    if (connectinArgs.ssl.clientkeypath) { connectionObject.ssl.key = [require('fs').readFileSync(connectinArgs.ssl.clientkeypath, 'utf8')]; }
-                }
-            } catch (ex) {
-                console.log('Error loading SQL Connector certificate: ' + ex);
-                process.exit();
+        try {
+            if (connectinArgs.ssl) {
+                if (connectinArgs.ssl.dontcheckserveridentity == true) { connectionObject.ssl.checkServerIdentity = function (name, cert) { return undefined; } };
+                if (connectinArgs.ssl.cacertpath) { connectinArgs.ssl.cacertpath = path.resolve(connectinArgs.ssl.cacertpath); connectionObject.ssl.ca = [require('fs').readFileSync(connectinArgs.ssl.cacertpath, 'utf8')]; }
+                if (connectinArgs.ssl.clientcertpath) { connectinArgs.ssl.clientcertpath = path.resolve(connectinArgs.ssl.clientcertpath); connectionObject.ssl.cert = [require('fs').readFileSync(connectinArgs.ssl.clientcertpath, 'utf8')]; }
+                if (connectinArgs.ssl.clientkeypath) { connectinArgs.ssl.clientkeypath = path.resolve(connectinArgs.ssl.clientkeypath); connectionObject.ssl.key = [require('fs').readFileSync(connectinArgs.ssl.clientkeypath, 'utf8')]; }
+            }
+        } catch (ex) {
+            console.log('Error loading SQL Connector certificate: ' + ex);
+            process.exit(0);
+        }
+
+        mysqldumpCommand = '\"' + mysqldumpPath + '\" --user=\'' + connectinArgs.user + '\'';
+        // Windows will treat ' as part of the pw. Linux/Unix requires it to escape.
+        mysqldumpCommand += (parent.platform == 'win32') ? ' --password=\"' + connectinArgs.password + '\"' : ' --password=\'' + connectinArgs.password + '\'';
+        if (connectinArgs.host) { mysqldumpCommand += ' -h ' + connectinArgs.host; }
+        if (connectinArgs.port) { mysqldumpCommand += ' -P ' + connectinArgs.port; }
+        if (connectinArgs.awsrds) { mysqldumpCommand += ' --single-transaction'; }
+        // SSL options different on mariadb/mysql
+        if (connectinArgs.ssl) {
+            if (connectinArgs.ssl.cacertpath) {mysqldumpCommand += ' --ssl-ca=' + connectinArgs.ssl.cacertpath};
+            if (connectinArgs.ssl.clientcertpath) {mysqldumpCommand += ' --ssl-cert=' + connectinArgs.ssl.clientcertpath};
+            if (connectinArgs.ssl.clientkeypath) {mysqldumpCommand += ' --ssl-key=' + connectinArgs.ssl.clientkeypath};
+            if (parent.args.mariadb) {
+                mysqldumpCommand += connectinArgs.ssl.dontcheckserveridentity ? ' --ssl-verify-server-cert=false' : ' --ssl-verify-server-cert';
+            } else { //MySQL
+                mysqldumpCommand += connectinArgs.ssl.dontcheckserveridentity ? ' --ssl-mode=required' : ' --ssl-mode=verify_identity';
             }
         }
+        mysqldumpCommand += ' ' + databaseName;
 
         if (parent.args.mariadb) {
             // Use MariaDB
             obj.databaseType = DB_MARIADB;
             var tempDatastore = require('mariadb').createPool(connectionObject);
             tempDatastore.getConnection().then(function (conn) {
-                conn.query('CREATE DATABASE IF NOT EXISTS ' + dbname).then(function (result) {
+                conn.query('CREATE DATABASE IF NOT EXISTS ' + databaseName).then(function (result) {
                     conn.release();
                 }).catch(function (ex) { console.log('Auto-create database failed: ' + ex); });
             }).catch(function (ex) { console.log('Auto-create database failed: ' + ex); });
             setTimeout(function () { tempDatastore.end(); }, 2000);
 
-            connectionObject.database = dbname;
+            connectionObject.database = databaseName;
             Datastore = require('mariadb').createPool(connectionObject);
-            createTablesIfNotExist(dbname);
+            createTablesIfNotExist(databaseName);
         } else if (parent.args.mysql) {
             // Use MySQL
             obj.databaseType = DB_MYSQL;
             var tempDatastore = require('mysql2').createPool(connectionObject);
-            tempDatastore.query('CREATE DATABASE IF NOT EXISTS ' + dbname, function (error) {
+            tempDatastore.query('CREATE DATABASE IF NOT EXISTS ' + databaseName, function (error) {
                 if (error != null) {
                     console.log('Auto-create database failed: ' + error);
                 }
-                connectionObject.database = dbname;
+                connectionObject.database = databaseName;
                 Datastore = require('mysql2').createPool(connectionObject);
-                createTablesIfNotExist(dbname);
+                createTablesIfNotExist(databaseName);
             });
             setTimeout(function () { tempDatastore.end(); }, 2000);
         }
@@ -3226,9 +3255,7 @@ module.exports.CreateDB = function (parent, func) {
                 else { r += parent.config.settings.autobackup.mongodumppath + '\r\n'; }
             }
             if (parent.config.settings.autobackup.mysqldumppath != null) {
-                r += 'MySqlDump Path: ';
-                if (typeof parent.config.settings.autobackup.mysqldumppath != 'string') { r += 'Bad mysqldump type\r\n'; }
-                else { r += parent.config.settings.autobackup.mysqldumppath + '\r\n'; }
+                r += 'MySqlDump Path: ' + mysqldumpPath + '\r\n';
             }
             if (parent.config.settings.autobackup.backupotherfolders) {
                 r += 'Backup other folders: ';
@@ -3266,50 +3293,6 @@ module.exports.CreateDB = function (parent, func) {
         }
 
         return r;
-    }
-
-    function buildSqlDumpCommand() {
-        var props = (obj.databaseType == DB_MARIADB) ? parent.args.mariadb : parent.args.mysql;
-
-        var mysqldumpPath = 'mysqldump';
-        if (parent.config.settings.autobackup && parent.config.settings.autobackup.mysqldumppath) { 
-            mysqldumpPath = path.normalize(parent.config.settings.autobackup.mysqldumppath);
-        }
-
-        var cmd = '\"' + mysqldumpPath + '\" --user=\'' + props.user + '\'';
-        // Windows will treat ' as part of the pw. Linux/Unix requires it to escape.
-        cmd += (parent.platform == 'win32') ? ' --password=\"' + props.password + '\"' : ' --password=\'' + props.password + '\'';
-        if (props.host) { cmd += ' -h ' + props.host; }
-        if (props.port) { cmd += ' -P ' + props.port; }
-
-        if (props.awsrds) { cmd += ' --single-transaction'; }
-
-        // SSL options different on mariadb/mysql
-        var sslOptions = '';
-        if (obj.databaseType == DB_MARIADB) {
-            if (props.ssl) {
-                sslOptions = ' --ssl';
-                if (props.ssl.cacertpath) sslOptions = ' --ssl-ca=' + props.ssl.cacertpath;
-                if (props.ssl.dontcheckserveridentity != true) sslOptions += ' --ssl-verify-server-cert';
-                if (props.ssl.clientcertpath) sslOptions += ' --ssl-cert=' + props.ssl.clientcertpath;
-                if (props.ssl.clientkeypath) sslOptions += ' --ssl-key=' + props.ssl.clientkeypath;
-            } 
-        } else {
-            if (props.ssl) {
-                sslOptions = ' --ssl-mode=required';
-                if (props.ssl.cacertpath) sslOptions = ' --ssl-ca=' + props.ssl.cacertpath;
-                if (props.ssl.dontcheckserveridentity != true) sslOptions += ' --ssl-mode=verify_identity';
-                else sslOptions += ' --ssl-mode=required';
-                if (props.ssl.clientcertpath) sslOptions += ' --ssl-cert=' + props.ssl.clientcertpath;
-                if (props.ssl.clientkeypath) sslOptions += ' --ssl-key=' + props.ssl.clientkeypath;
-            }
-        }
-        cmd += sslOptions;
-
-        var dbname = (props.database) ? props.database : 'meshcentral';
-        cmd += ' ' + dbname
-
-        return cmd;
     }
 
     function buildMongoDumpCommand() {
@@ -3354,8 +3337,7 @@ module.exports.CreateDB = function (parent, func) {
             });
         } else if ((obj.databaseType == DB_MARIADB) || (obj.databaseType == DB_MYSQL)) {
             // Check that we have access to mysqldump
-            var cmd = buildSqlDumpCommand();
-            cmd += ' > ' + ((parent.platform == 'win32') ? '\"nul\"' : '\"/dev/null\"');
+            cmd = mysqldumpCommand + ' > ' + ((parent.platform == 'win32') ? '\"nul\"' : '\"/dev/null\"');
             const child_process = require('child_process');
             child_process.exec(cmd, { cwd: backupPath }, function(error, stdout, stdin) {
                 try {
@@ -3544,8 +3526,7 @@ module.exports.CreateDB = function (parent, func) {
                 const newBackupFile = 'mysqldump-' + fileSuffix;
                 obj.newDBDumpFile = path.join(backupPath, newBackupFile + '.sql');
            
-                var cmd = buildSqlDumpCommand();
-                cmd += ' --result-file=\"' + obj.newDBDumpFile + '\"';
+                cmd = mysqldumpCommand + ' --result-file=\"' + obj.newDBDumpFile + '\"';
 
                 const child_process = require('child_process');
                 const dumpProcess = child_process.exec(

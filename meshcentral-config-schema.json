@@ -75,15 +75,15 @@
               "properties": {
                 "caCertPath": {
                   "type": "string",
-                  "description": "Absolute path to the CA certificate. Required for self-signed certificates"
+                  "description": "Path to the CA certificate. Required for self-signed certificates"
                 },
                 "clientCertPath": {
                   "type": "string",
-                  "description": "Absolute path to the client certificate. Required for two-way SSL Authentication"
+                  "description": "Path to the client certificate. Required for two-way SSL Authentication"
                 },
                 "clientKeyPath": {
                   "type": "string",
-                  "description": "Absolute path to the client key. Required for two-way SSL Authentication"
+                  "description": "Path to the client key. Required for two-way SSL Authentication"
                 },
                 "dontCheckServerIdentity": {
                   "type": "boolean",
@@ -166,15 +166,15 @@
               "properties": {
                 "caCertPath": {
                   "type": "string",
-                  "description": "Absolute path to the CA certificate. Required for self-signed certificates"
+                  "description": "Path to the CA certificate. Required for self-signed certificates"
                 },
                 "clientCertPath": {
                   "type": "string",
-                  "description": "Absolute path to the client certificate. Required for two-way SSL Authentication"
+                  "description": "Path to the client certificate. Required for two-way SSL Authentication"
                 },
                 "clientKeyPath": {
                   "type": "string",
-                  "description": "Absolute path to the client key. Required for two-way SSL Authentication"
+                  "description": "Path to the client key. Required for two-way SSL Authentication"
                 },
                 "dontCheckServerIdentity": {
                   "type": "boolean",
