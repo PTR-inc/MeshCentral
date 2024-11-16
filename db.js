@@ -857,9 +857,9 @@ module.exports.CreateDB = function (parent, func) {
                 "port": parts[4],
                 "database": parts[5]
             };
-            var dbname = (connectionObject.database != null) ? connectionObject.database : 'meshcentral';
+            databaseName = (connectionObject.database != null) ? connectionObject.database : 'meshcentral';
         } else {
-            var dbname = (connectinArgs.database != null) ? connectinArgs.database : 'meshcentral';
+            databaseName = (connectinArgs.database != null) ? connectinArgs.database : 'meshcentral';
 
             // Including the db name in the connection obj will cause a connection faliure if it does not exist
             var connectionObject = Clone(connectinArgs);
@@ -883,26 +883,26 @@ module.exports.CreateDB = function (parent, func) {
             obj.databaseType = DB_MARIADB;
             var tempDatastore = require('mariadb').createPool(connectionObject);
             tempDatastore.getConnection().then(function (conn) {
-                conn.query('CREATE DATABASE IF NOT EXISTS ' + dbname).then(function (result) {
+                conn.query('CREATE DATABASE IF NOT EXISTS ' + databaseName).then(function (result) {
                     conn.release();
                 }).catch(function (ex) { console.log('Auto-create database failed: ' + ex); });
             }).catch(function (ex) { console.log('Auto-create database failed: ' + ex); });
             setTimeout(function () { tempDatastore.end(); }, 2000);
 
-            connectionObject.database = dbname;
+            connectionObject.database = databaseName;
             Datastore = require('mariadb').createPool(connectionObject);
-            createTablesIfNotExist(dbname);
+            createTablesIfNotExist(databaseName);
         } else if (parent.args.mysql) {
             // Use MySQL
             obj.databaseType = DB_MYSQL;
             var tempDatastore = require('mysql2').createPool(connectionObject);
-            tempDatastore.query('CREATE DATABASE IF NOT EXISTS ' + dbname, function (error) {
+            tempDatastore.query('CREATE DATABASE IF NOT EXISTS ' + databaseName, function (error) {
                 if (error != null) {
                     console.log('Auto-create database failed: ' + error);
                 }
-                connectionObject.database = dbname;
+                connectionObject.database = databaseName;
                 Datastore = require('mysql2').createPool(connectionObject);
-                createTablesIfNotExist(dbname);
+                createTablesIfNotExist(databaseName);
             });
             setTimeout(function () { tempDatastore.end(); }, 2000);
         }
@@ -963,10 +963,9 @@ module.exports.CreateDB = function (parent, func) {
             parent.debug('db', 'Connected to MongoDB database...');
 
             // Get the database name and setup the database client
-            var dbname = 'meshcentral';
-            if (parent.args.mongodbname) { dbname = parent.args.mongodbname; }
+            if (parent.args.mongodbname) { databaseName = parent.args.mongodbname; }
             const dbcollectionname = (parent.args.mongodbcol) ? (parent.args.mongodbcol) : 'meshcentral';
-            const db = client.db(dbname);
+            const db = client.db(databaseName);
 
             // Check the database version
             db.admin().serverInfo(function (err, info) {
@@ -3186,17 +3185,11 @@ module.exports.CreateDB = function (parent, func) {
         var r = '', backupPath = parent.backuppath;
         if (parent.config.settings.autobackup && parent.config.settings.autobackup.backuppath) { backupPath = parent.config.settings.autobackup.backuppath; }
 
-        let dbname = 'meshcentral';
-        if (parent.args.mongodbname) { dbname = parent.args.mongodbname; }
-        else if ((typeof parent.args.mariadb == 'object') && (typeof parent.args.mariadb.database == 'string')) { dbname = parent.args.mariadb.database; }
-        else if ((typeof parent.args.mysql == 'object') && (typeof parent.args.mysql.database == 'string')) { dbname = parent.args.mysql.database; }
-        else if (typeof parent.config.settings.sqlite3 == 'string') {dbname = parent.config.settings.sqlite3 + '.sqlite'};
-
         const currentDate = new Date();
         const fileSuffix = currentDate.getFullYear() + '-' + padNumber(currentDate.getMonth() + 1, 2) + '-' + padNumber(currentDate.getDate(), 2) + '-' + padNumber(currentDate.getHours(), 2) + '-' + padNumber(currentDate.getMinutes(), 2);
         obj.newAutoBackupFile = ((typeof parent.config.settings.autobackup.backupname == 'string') ? parent.config.settings.autobackup.backupname : 'meshcentral-autobackup-') + fileSuffix;
 
-        r += 'DB Name: ' + dbname + '\r\n';
+        r += 'DB Name: ' + databaseName + '\r\n';
         r += 'DB Type: ' + DB_LIST[obj.databaseType] + '\r\n';
         r += 'BackupPath: ' + backupPath + '\r\n';
         r += 'BackupFile: ' + obj.newAutoBackupFile + '.zip\r\n';
