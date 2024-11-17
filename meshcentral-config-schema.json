@@ -21,8 +21,76 @@
           "description": "Force MeshCentral to use the HTTPS and MPS certificates even if the name does not match the expected DNS value."
         },
         "mongoDb": {
-          "type": "string",
-          "default": null
+          "type": ["string", "object"],
+          "default": null,
+          "description": "Add this section to connect MeshCentral to a MongoDB database instance.",
+          "properties": {
+            "host": {
+              "type": "string",
+              "description": "MongoDB hostname"
+            },
+            "port": {
+              "type": "number",
+              "default": 27017,
+              "description": "MongoDB port number"
+            },
+            "user": {
+              "type": "string",
+              "description": "MongoDB username"
+            },
+            "password": {
+              "type": "string",
+              "description": "MongoDB password"
+            },
+            "databaseName": {
+              "type": "string",
+              "default": "meshcentral",
+              "description": "Name of MongoDB database used"
+            },
+            "authenticationDatabase": {
+              "type": "string",
+              "default": null,
+              "description": "Database where the user resides, default mongo uses the database connecting to"
+            },
+            "collection": {
+              "type": "string",
+              "default": "meshcentral",
+              "description": "MongoDB collection"
+            },
+            "changeStream": {
+              "type": "boolean",
+              "default": false ,
+              "description": "Used for replicasets and sharded clusters."
+            },
+            "bulkOperations": {
+              "type": "boolean",
+              "default": false,
+              "description": "Group transactions for better performance"
+            },
+            "gzip": {
+              "type": "boolean",
+              "default": false,
+              "description": "Compress the dump with gzip."
+            },
+            "ssl": {
+              "type": "object",
+              "description": "SSL Options.",
+              "properties": {
+                "caCertPath": {
+                  "type": "string",
+                  "description": "Path to the CA certificate. Required for self-signed certificates"
+                },
+                "clientCertKeyPath": {
+                  "type": "string",
+                  "description": "Path to the client certificate. This must include the key."
+                },
+                "dontCheckServerIdentity": {
+                  "type": "boolean",
+                  "description": "Set true to not check the server hostname during verification"
+                }
+              }
+            }
+          }
         },
         "mongoDbName": {
           "type": "string"
