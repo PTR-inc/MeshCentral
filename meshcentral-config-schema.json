@@ -21,8 +21,55 @@
           "description": "Force MeshCentral to use the HTTPS and MPS certificates even if the name does not match the expected DNS value."
         },
         "mongoDb": {
-          "type": "string",
-          "default": null
+          "type": ["string", "object"],
+          "default": null,
+          "description": "Add this section to connect MeshCentral to a MongoDB database instance.",
+          "properties": {
+            "host": {
+              "type": "string",
+              "description": "MongoDB hostname"
+            },
+            "user": {
+              "type": "string",
+              "description": "MongoDB username"
+            },
+            "port": {
+              "type": "number",
+              "description": "MongoDB port number"
+            },
+            "password": {
+              "type": "string",
+              "description": "MongoDB password"
+            },
+            "database": {
+              "type": "string",
+              "default": "meshcentral",
+              "description": "Name of MongoDB database used"
+            },
+            "collection": {
+              "type": "string",
+              "default": "meshcentral",
+              "description": "MongoDB collection, default 'meshcentral'."
+            },
+            "ssl": {
+              "type": "object",
+              "description": "SSL Options.",
+              "properties": {
+                "caCertPath": {
+                  "type": "string",
+                  "description": "Path to the CA certificate. Required for self-signed certificates"
+                },
+                "clientCertKeyPath": {
+                  "type": "string",
+                  "description": "Path to the client certificate. This must include the key."
+                },
+                "dontCheckServerIdentity": {
+                  "type": "boolean",
+                  "description": "Set true to not check the server hostname during verification"
+                }
+              }
+            }
+          }
         },
         "mongoDbName": {
           "type": "string"

@@ -50,6 +50,7 @@ module.exports.CreateDB = function (parent, func) {
         journalSize: 4096000,
         synchronous: 'full',
     };
+    let dbConfig = {};
     obj.performingBackup = false;
     const BACKUPFAIL_ZIPCREATE = 0x0001;
     const BACKUPFAIL_ZIPMODULE = 0x0010;
@@ -952,21 +953,43 @@ module.exports.CreateDB = function (parent, func) {
     } else if (parent.args.mongodb) {
         // Use MongoDB
         obj.databaseType = DB_MONGODB;
+        dbConfig = parent.config.settings.mongodb;
+        let url;
+        //mongodb://ptr:blabla@localhost:27017/?tls=true&tlsAllowInvalidHostnames=true&tlsCAFile=P:/Repo/mc2/meshcentral-data/mi_ca.pem&tlsCertificateKeyFile=P:/Repo/mc2/meshcentral-data/mi_server.pem
+        if (typeof(dbConfig) == 'string') {
+            //org settings to object
+            url = dbConfig;
+            dbConfig = {};
+            dbConfig.collection = parent.config.settings.mongodbcol ? parent.config.settings.mongodbcol : 'meshcentral';
+            dbConfig.database = parent.config.settings.mongodbname ? parent.config.settings.mongodbname : 'meshcentral';
+        } else {
+            url = 'mongodb://';
+            if (dbConfig.user) {
+                url += dbConfig.user + ':' + dbConfig.password + '@';
+            }
+            url += dbConfig.host + ':' + dbConfig.port + '/';
+            if (dbConfig.ssl) {
+                url += '?tls=true';
+                if (dbConfig.ssl.dontcheckserveridentity) {url += '&tlsAllowInvalidHostnames=true'};
+                if (dbConfig.ssl.cacertpath) {url += '&tlsCAFile=' + path.resolve(dbConfig.ssl.cacertpath)};
+                if (dbConfig.ssl.clientcertkeypath) {url+= '&tlsCertificateKeyFile='+ path.resolve(dbConfig.ssl.clientcertkeypath)};
+            }
+            
 
-        // If running an older NodeJS version, TextEncoder/TextDecoder is required
-        if (global.TextEncoder == null) { global.TextEncoder = require('util').TextEncoder; }
-        if (global.TextDecoder == null) { global.TextDecoder = require('util').TextDecoder; }
+            dbConfig.database = dbConfig.database ? dbConfig.database : 'meshcentral';
+            dbConfig.collection = dbConfig.collection ? dbConfig.collection : 'meshcentral';
 
-        require('mongodb').MongoClient.connect(parent.args.mongodb, { useNewUrlParser: true, useUnifiedTopology: true, enableUtf8Validation: false }, function (err, client) {
+        }
+        dbConfig.url = url;
+
+        require('mongodb-legacy').MongoClient.connect(url, { enableUtf8Validation: false }, function (err, client) {
             if (err != null) { console.log("Unable to connect to database: " + err); process.exit(); return; }
             Datastore = client;
             parent.debug('db', 'Connected to MongoDB database...');
 
             // Get the database name and setup the database client
-            var dbname = 'meshcentral';
-            if (parent.args.mongodbname) { dbname = parent.args.mongodbname; }
-            const dbcollectionname = (parent.args.mongodbcol) ? (parent.args.mongodbcol) : 'meshcentral';
-            const db = client.db(dbname);
+            const dbcollectionname = dbConfig.collection;
+            const db = client.db(dbConfig.database);
 
             // Check the database version
             db.admin().serverInfo(function (err, info) {
@@ -3313,15 +3336,14 @@ module.exports.CreateDB = function (parent, func) {
     }
 
     function buildMongoDumpCommand() {
-        const dburl = parent.args.mongodb;
 
         var mongoDumpPath = 'mongodump';
         if (parent.config.settings.autobackup && parent.config.settings.autobackup.mongodumppath) {
-            mongoDumpPath = path.normalize(parent.config.settings.autobackup.mongodumppath);
+            mongoDumpPath = path.resolve(parent.config.settings.autobackup.mongodumppath);
         }
 
         var cmd = '"' + mongoDumpPath + '"';
-        if (dburl) { cmd = '\"' + mongoDumpPath + '\" --uri=\"' + dburl + '\"'; }
+        cmd = '\"' + mongoDumpPath + '\" --uri=\"' + dbConfig.url + '\"';
 
         return cmd;
     }
@@ -3336,6 +3358,7 @@ module.exports.CreateDB = function (parent, func) {
 
         if ((obj.databaseType == DB_MONGOJS) || (obj.databaseType == DB_MONGODB)) {
             // Check that we have access to MongoDump
+            //"C:\Program Files\MongoDB\Server\8.0\bin\mongodump.exe" /h 127.0.0.1 /port:27017 /ssl /sslCAFile:P:\Repo\mc2\meshcentral-data\mi_ca.pem /sslPEMKeyFile:P:\Repo\mc2\meshcentral-data\mi_server.pem /tlsInsecure /username:root /password:blabla /db:lutser /collection:meshkol /v
             var cmd = buildMongoDumpCommand();
             cmd += (parent.platform == 'win32') ? ' --archive=\"nul\"' : ' --archive=\"/dev/null\"';
             const child_process = require('child_process');
