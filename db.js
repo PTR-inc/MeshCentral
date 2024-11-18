@@ -985,7 +985,14 @@ module.exports.CreateDB = function (parent, func) {
             dbConfig.collection = dbConfig.collection ? dbConfig.collection : 'meshcentral';
         }
         dbConfig.connectionstring = uri;
-        dbConfig.dumpcommand = parent.config.settings.autobackup.mongodumppath ? '\"' + path.resolve(parent.config.settings.autobackup.mongodumppath) + '\" ' : 'mongodump ';
+        
+        dbConfig.dumpcommand = 'mongodump';
+        //only resolve non-default config paths so dumpshell can use system paths, also exclude mongodump.exe
+        if (parent.config.settings.autobackup && parent.config.settings.autobackup.mongodumppath && !((parent.config.settings.autobackup.mongodumppath).startsWith('mongodump')) ) {
+            dbConfig.dumpcommand = path.resolve(parent.config.settings.autobackup.mongodumppath);
+        } else if (typeof (parent.config.settings.autobackup.mongodumppath) == 'string') {dbConfig.dumpcommand = parent.config.settings.autobackup.mongodumppath; }
+        //quotes for the shell and some space
+        dbConfig.dumpcommand = '\"' + dbConfig.dumpcommand + '\" ';
         //mongodump does not recognise '&tlsAllowInvalidHostnames=true' in the uri
         if (dbConfig.ssl && dbConfig.ssl.dontcheckserveridentity) { dbConfig.dumpcommand += '--tlsInsecure '; };
         dbConfig.dumpcommand += '\"' + uri + '\"';
