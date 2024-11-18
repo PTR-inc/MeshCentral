@@ -1011,9 +1011,9 @@ module.exports.CreateDB = function (parent, func) {
                 if ((err != null) || (info == null) || (info.versionArray == null) || (Array.isArray(info.versionArray) == false) || (info.versionArray.length < 2) || (typeof info.versionArray[0] != 'number') || (typeof info.versionArray[1] != 'number')) {
                     console.log('WARNING: Unable to check MongoDB version.');
                 } else {
-                    if ((info.versionArray[0] < 3) || ((info.versionArray[0] == 3) && (info.versionArray[1] < 6))) {
-                        // We are running with mongoDB older than 3.6, this is not good.
-                        parent.addServerWarning("Current version of MongoDB (" + info.version + ") is too old, please upgrade to MongoDB 3.6 or better.");
+                    if ((info.versionArray[0] < 6) ) {
+                        // We are running with mongoDB older than 6
+                        parent.addServerWarning("Current version of MongoDB (" + info.version + ") is end-of-life, please upgrade to MongoDB 6 or better.");
                     }
                 }
             });

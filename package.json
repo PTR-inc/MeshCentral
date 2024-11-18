@@ -36,6 +36,11 @@
     "sample-config.json",
     "sample-config-advanced.json"
   ],
+  "overrides": {
+    "mongodb-legacy": {
+      "mongodb": "6.9"
+    }
+  },
   "dependencies": {
     "@yetzt/nedb": "1.8.0",
     "archiver": "7.0.1",
