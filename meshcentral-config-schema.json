@@ -29,13 +29,14 @@
               "type": "string",
               "description": "MongoDB hostname"
             },
+            "port": {
+              "type": "number",
+              "default": 27017,
+              "description": "MongoDB port number"
+            },
             "user": {
               "type": "string",
               "description": "MongoDB username"
-            },
-            "port": {
-              "type": "number",
-              "description": "MongoDB port number"
             },
             "password": {
               "type": "string",
@@ -46,10 +47,25 @@
               "default": "meshcentral",
               "description": "Name of MongoDB database used"
             },
+            "authenticationDatabase": {
+              "type": "string",
+              "default": null,
+              "description": "Database where the user resides, default mongo uses the database connecting to"
+            },
             "collection": {
               "type": "string",
               "default": "meshcentral",
-              "description": "MongoDB collection, default 'meshcentral'."
+              "description": "MongoDB collection"
+            },
+            "DbChangeStream": {
+              "type": "boolean",
+              "default": false ,
+              "description": "Used for replicasets"
+            },
+            "DbBulkOperations": {
+              "type": "boolean",
+              "default": false,
+              "description": "Group transactions for better performance"
             },
             "ssl": {
               "type": "object",

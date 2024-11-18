@@ -72,7 +72,7 @@ module.exports.CreateDB = function (parent, func) {
     }
 
     // MongoDB bulk operations state
-    if (parent.config.settings.mongodbbulkoperations) {
+    if (parent.config.settings.mongodbbulkoperations || dbConfig.dbbulkoperations) {
         // Added counters
         obj.dbCounters.fileSetPending = 0;
         obj.dbCounters.fileSetBulk = 0;
@@ -954,36 +954,44 @@ module.exports.CreateDB = function (parent, func) {
         // Use MongoDB
         obj.databaseType = DB_MONGODB;
         dbConfig = parent.config.settings.mongodb;
-        let url;
-        //mongodb://ptr:blabla@localhost:27017/?tls=true&tlsAllowInvalidHostnames=true&tlsCAFile=P:/Repo/mc2/meshcentral-data/mi_ca.pem&tlsCertificateKeyFile=P:/Repo/mc2/meshcentral-data/mi_server.pem
+        let uri;
         if (typeof(dbConfig) == 'string') {
             //org settings to object
-            url = dbConfig;
+            uri = dbConfig;
             dbConfig = {};
             dbConfig.collection = parent.config.settings.mongodbcol ? parent.config.settings.mongodbcol : 'meshcentral';
-            dbConfig.database = parent.config.settings.mongodbname ? parent.config.settings.mongodbname : 'meshcentral';
+            databaseName = (dbConfig.database = parent.config.settings.mongodbname ? parent.config.settings.mongodbname : 'meshcentral');
+            dbConfig.dbbulkoperations = parent.config.settings.mongodbbulkoperations ? true : false;
+            dbConfig.dbchangestream = parent.config.settings.mongodbchangestream ? true : false;
         } else {
-            url = 'mongodb://';
+            uri = 'mongodb://';
             if (dbConfig.user) {
-                url += dbConfig.user + ':' + dbConfig.password + '@';
+                uri += dbConfig.user + ':' + dbConfig.password + '@';
             }
-            url += dbConfig.host + ':' + dbConfig.port + '/';
+            dbConfig.port = dbConfig.port ? dbConfig.port : 27017;
+            uri += dbConfig.host + ':' + dbConfig.port + '/' + dbConfig.database;
+            let q = '?';
+            if (dbConfig.authenticationdatabase) { uri += '?authSource=' + dbConfig.authenticationdatabase; q = '&' };
             if (dbConfig.ssl) {
-                url += '?tls=true';
-                if (dbConfig.ssl.dontcheckserveridentity) {url += '&tlsAllowInvalidHostnames=true'};
-                if (dbConfig.ssl.cacertpath) {url += '&tlsCAFile=' + path.resolve(dbConfig.ssl.cacertpath)};
-                if (dbConfig.ssl.clientcertkeypath) {url+= '&tlsCertificateKeyFile='+ path.resolve(dbConfig.ssl.clientcertkeypath)};
+                uri += `${q}tls=true`;
+                if (dbConfig.ssl.dontcheckserveridentity) {uri += '&tlsAllowInvalidHostnames=true'};
+                if (dbConfig.ssl.cacertpath) {uri += '&tlsCAFile=' + path.resolve(dbConfig.ssl.cacertpath)};
+                if (dbConfig.ssl.clientcertkeypath) {uri+= '&tlsCertificateKeyFile='+ path.resolve(dbConfig.ssl.clientcertkeypath)};
             }
             
-
-            dbConfig.database = dbConfig.database ? dbConfig.database : 'meshcentral';
+            if (dbConfig.dbbulkoperations != true) dbConfig.dbbulkoperations = false;
+            if (dbConfig.dbchangestream != true) dbConfig.dbchangestream = false;
+            databaseName = (dbConfig.database = dbConfig.database ? dbConfig.database : 'meshcentral');
             dbConfig.collection = dbConfig.collection ? dbConfig.collection : 'meshcentral';
-
         }
-        dbConfig.url = url;
-
-        require('mongodb-legacy').MongoClient.connect(url, { enableUtf8Validation: false }, function (err, client) {
-            if (err != null) { console.log("Unable to connect to database: " + err); process.exit(); return; }
+        dbConfig.connectionstring = uri;
+        dbConfig.dumpcommand = parent.config.settings.autobackup.mongodumppath ? '\"' + path.resolve(parent.config.settings.autobackup.mongodumppath) + '\" ' : 'mongodump ';
+        //mongodump does not recognise '&tlsAllowInvalidHostnames=true' in the uri
+        if (dbConfig.ssl && dbConfig.ssl.dontcheckserveridentity) { dbConfig.dumpcommand += '--tlsInsecure '; };
+        dbConfig.dumpcommand += '\"' + uri + '\"';
+            
+        require('mongodb-legacy').MongoClient.connect(uri, { enableUtf8Validation: false }, function (err, client) {
+            if (err != null) { console.log("Unable to connect to database: " + err); process.exit(0);}
             Datastore = client;
             parent.debug('db', 'Connected to MongoDB database...');
 
@@ -1021,7 +1029,7 @@ module.exports.CreateDB = function (parent, func) {
             });
 
             // Setup the changeStream on the MongoDB main collection if possible
-            if (parent.args.mongodbchangestream == true) {
+            if (parent.config.settings.mongodbchangestream || dbConfig.dbchangestream == true) {
                 obj.dbCounters.changeStream = { change: 0, update: 0, insert: 0, delete: 0 };
                 if (typeof obj.file.watch != 'function') {
                     console.log('WARNING: watch() is not a function, MongoDB ChangeStream not supported.');
@@ -2676,7 +2684,7 @@ module.exports.CreateDB = function (parent, func) {
             // Database actions on the main collection (MongoDB)
 
             // Bulk operations
-            if (parent.config.settings.mongodbbulkoperations) {
+            if (parent.config.settings.mongodbbulkoperations || dbConfig.dbbulkoperations) {
                 obj.Set = function (data, func) { // Fast Set operation using bulkWrite(), this is much faster then using replaceOne()
                     if (obj.filePendingSet == false) {
                         // Perform the operation now
@@ -2792,7 +2800,7 @@ module.exports.CreateDB = function (parent, func) {
             obj.GetUserWithVerifiedEmail = function (domain, email, func) { obj.file.find({ type: 'user', domain: domain, email: email, emailVerified: true }).toArray(function (err, docs) { func(err, performTypedRecordDecrypt(docs)); }); };
 
             // Bulk operations
-            if (parent.config.settings.mongodbbulkoperations) {
+            if (parent.config.settings.mongodbbulkoperations || dbConfig.dbbulkoperations) {
                 obj.Remove = function (id, func) { // Fast remove operation using a bulk find() to reduce round trips to the database.
                     if (obj.filePendingRemoves == null) {
                         // No pending removes, perform the operation now.
@@ -2837,7 +2845,7 @@ module.exports.CreateDB = function (parent, func) {
             obj.GetAllEvents = function (func) { obj.eventsfile.find({}).toArray(func); };
 
             // Bulk operations
-            if (parent.config.settings.mongodbbulkoperations) {
+            if (parent.config.settings.mongodbbulkoperations || dbConfig.dbbulkoperations) {
                 obj.StoreEvent = function (event, func) { // Fast MongoDB event store using bulkWrite()
                     if (obj.eventsFilePendingSet == false) {
                         // Perform the operation now
@@ -2904,7 +2912,7 @@ module.exports.CreateDB = function (parent, func) {
             obj.getAllPower = function (func) { obj.powerfile.find({}).toArray(func); };
 
             // Bulk operations
-            if (parent.config.settings.mongodbbulkoperations) {
+            if (parent.config.settings.mongodbbulkoperations || dbConfig.dbbulkoperations) {
                 obj.storePowerEvent = function (event, multiServer, func) { // Fast MongoDB event store using bulkWrite()
                     if (multiServer != null) { event.server = multiServer.serverid; }
                     if (obj.powerFilePendingSet == false) {
@@ -3335,19 +3343,6 @@ module.exports.CreateDB = function (parent, func) {
         return cmd;
     }
 
-    function buildMongoDumpCommand() {
-
-        var mongoDumpPath = 'mongodump';
-        if (parent.config.settings.autobackup && parent.config.settings.autobackup.mongodumppath) {
-            mongoDumpPath = path.resolve(parent.config.settings.autobackup.mongodumppath);
-        }
-
-        var cmd = '"' + mongoDumpPath + '"';
-        cmd = '\"' + mongoDumpPath + '\" --uri=\"' + dbConfig.url + '\"';
-
-        return cmd;
-    }
-
     // Check that the server is capable of performing a backup
     obj.checkBackupCapability = function (func) {
         if ((parent.config.settings.autobackup == null) || (parent.config.settings.autobackup == false)) { func(); return; };
@@ -3358,8 +3353,7 @@ module.exports.CreateDB = function (parent, func) {
 
         if ((obj.databaseType == DB_MONGOJS) || (obj.databaseType == DB_MONGODB)) {
             // Check that we have access to MongoDump
-            //"C:\Program Files\MongoDB\Server\8.0\bin\mongodump.exe" /h 127.0.0.1 /port:27017 /ssl /sslCAFile:P:\Repo\mc2\meshcentral-data\mi_ca.pem /sslPEMKeyFile:P:\Repo\mc2\meshcentral-data\mi_server.pem /tlsInsecure /username:root /password:blabla /db:lutser /collection:meshkol /v
-            var cmd = buildMongoDumpCommand();
+            let cmd = dbConfig.dumpcommand;
             cmd += (parent.platform == 'win32') ? ' --archive=\"nul\"' : ' --archive=\"/dev/null\"';
             const child_process = require('child_process');
             child_process.exec(cmd, { cwd: backupPath }, function (error, stdout, stderr) {
@@ -3542,14 +3536,10 @@ module.exports.CreateDB = function (parent, func) {
 
             if ((obj.databaseType == DB_MONGOJS) || (obj.databaseType == DB_MONGODB)) {
                 // Perform a MongoDump
-                const dbname = (parent.args.mongodbname) ? (parent.args.mongodbname) : 'meshcentral';
-                const dburl = parent.args.mongodb;
-    
-                obj.newDBDumpFile = path.join(backupPath, (dbname + '-mongodump-' + fileSuffix + '.archive'));
+                obj.newDBDumpFile = path.join(backupPath, (databaseName + '-mongodump-' + fileSuffix + '.archive'));
 
-                var cmd = buildMongoDumpCommand();
-                cmd += (dburl) ? ' --archive=\"' + obj.newDBDumpFile + '\"' :
-                                 ' --db=\"' + dbname + '\" --archive=\"' + obj.newDBDumpFile + '\"';
+                let cmd = dbConfig.dumpcommand;
+                cmd += ' --archive=\"' + obj.newDBDumpFile + '\"';
 
                 const child_process = require('child_process');
                 const dumpProcess = child_process.exec(
