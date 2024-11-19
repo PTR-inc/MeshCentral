@@ -955,6 +955,16 @@ module.exports.CreateDB = function (parent, func) {
         obj.databaseType = DB_MONGODB;
         dbConfig = parent.config.settings.mongodb;
         let uri;
+        //prep mongodump path
+        dbConfig.dumpcommand = 'mongodump';
+        //only resolve non-default config paths so dumpshell can use system paths, also exclude mongodump.exe
+        if (parent.config.settings.autobackup && parent.config.settings.autobackup.mongodumppath && !((parent.config.settings.autobackup.mongodumppath).startsWith('mongodump')) ) {
+            dbConfig.dumpcommand = path.resolve(parent.config.settings.autobackup.mongodumppath);
+        } else if (parent.config.settings.autobackup && typeof (parent.config.settings.autobackup.mongodumppath) == 'string') {dbConfig.dumpcommand = parent.config.settings.autobackup.mongodumppath; }
+        //quotes for the shell and some space
+        dbConfig.dumpcommand = '\"' + dbConfig.dumpcommand + '\"';
+
+        //check string or object config
         if (typeof(dbConfig) == 'string') {
             //org settings to object
             uri = dbConfig;
@@ -973,10 +983,11 @@ module.exports.CreateDB = function (parent, func) {
             let q = '?';
             if (dbConfig.authenticationdatabase) { uri += '?authSource=' + dbConfig.authenticationdatabase; q = '&' };
             if (dbConfig.ssl) {
+                //As the ssl options changed from 3.6 onward to tls, include all possible options on uri and cmdline. Unknowns are ignored by mongodump
                 uri += `${q}tls=true`;
-                if (dbConfig.ssl.dontcheckserveridentity) {uri += '&tlsAllowInvalidHostnames=true'};
-                if (dbConfig.ssl.cacertpath) {uri += '&tlsCAFile=' + path.resolve(dbConfig.ssl.cacertpath)};
-                if (dbConfig.ssl.clientcertkeypath) {uri+= '&tlsCertificateKeyFile='+ path.resolve(dbConfig.ssl.clientcertkeypath)};
+                if (dbConfig.ssl.dontcheckserveridentity) { uri += '&tlsAllowInvalidHostnames=true'; dbConfig.dumpcommand += ' --tlsInsecure --sslAllowInvalidHostnames'; };
+                if (dbConfig.ssl.cacertpath) { uri += '&tlsCAFile=' + path.resolve(dbConfig.ssl.cacertpath) + ''; dbConfig.dumpcommand += ' --sslCAFile=\"' + path.resolve(dbConfig.ssl.cacertpath) + '\"'; };
+                if (dbConfig.ssl.clientcertkeypath) { uri += '&tlsCertificateKeyFile=' + path.resolve(dbConfig.ssl.clientcertkeypath) + ''; dbConfig.dumpcommand += ' --sslPEMKeyFile=\"' + path.resolve(dbConfig.ssl.clientcertkeypath) + '\"'; };
             }
             
             if (dbConfig.dbbulkoperations != true) dbConfig.dbbulkoperations = false;
@@ -984,20 +995,11 @@ module.exports.CreateDB = function (parent, func) {
             databaseName = (dbConfig.database = dbConfig.database ? dbConfig.database : 'meshcentral');
             dbConfig.collection = dbConfig.collection ? dbConfig.collection : 'meshcentral';
         }
-        dbConfig.connectionstring = uri;
+        dbConfig.connectionstring = encodeURI(uri);
         
-        dbConfig.dumpcommand = 'mongodump';
-        //only resolve non-default config paths so dumpshell can use system paths, also exclude mongodump.exe
-        if (parent.config.settings.autobackup && parent.config.settings.autobackup.mongodumppath && !((parent.config.settings.autobackup.mongodumppath).startsWith('mongodump')) ) {
-            dbConfig.dumpcommand = path.resolve(parent.config.settings.autobackup.mongodumppath);
-        } else if (typeof (parent.config.settings.autobackup.mongodumppath) == 'string') {dbConfig.dumpcommand = parent.config.settings.autobackup.mongodumppath; }
-        //quotes for the shell and some space
-        dbConfig.dumpcommand = '\"' + dbConfig.dumpcommand + '\" ';
-        //mongodump does not recognise '&tlsAllowInvalidHostnames=true' in the uri
-        if (dbConfig.ssl && dbConfig.ssl.dontcheckserveridentity) { dbConfig.dumpcommand += '--tlsInsecure '; };
-        dbConfig.dumpcommand += '\"' + uri + '\"';
+        dbConfig.dumpcommand += ' --uri=' + dbConfig.connectionstring + '';
             
-        require('mongodb-legacy').MongoClient.connect(uri, { enableUtf8Validation: false }, function (err, client) {
+        require('mongodb-legacy').MongoClient.connect(dbConfig.connectionstring, { enableUtf8Validation: false }, function (err, client) {
             if (err != null) { console.log("Unable to connect to database: " + err); process.exit(0);}
             Datastore = client;
             parent.debug('db', 'Connected to MongoDB database...');
@@ -3365,7 +3367,8 @@ module.exports.CreateDB = function (parent, func) {
             const child_process = require('child_process');
             child_process.exec(cmd, { cwd: backupPath }, function (error, stdout, stderr) {
                 try {
-                    if ((error != null) && (error != '')) {
+                    //if stderr contains 'done dumping' it worked, but gives an error because of invalid args
+                    if ((error != null) && (error != '') && !(stderr.includes('done dumping'))) {
                         if (parent.platform == 'win32') {
                             func(1, "Unable to find mongodump.exe, MongoDB database auto-backup will not be performed.");
                         } else {
