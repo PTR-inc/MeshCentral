@@ -42,7 +42,7 @@
               "type": "string",
               "description": "MongoDB password"
             },
-            "database": {
+            "databaseName": {
               "type": "string",
               "default": "meshcentral",
               "description": "Name of MongoDB database used"
@@ -57,15 +57,20 @@
               "default": "meshcentral",
               "description": "MongoDB collection"
             },
-            "DbChangeStream": {
+            "changeStream": {
               "type": "boolean",
               "default": false ,
-              "description": "Used for replicasets"
+              "description": "Used for replicasets and sharded clusters."
             },
-            "DbBulkOperations": {
+            "bulkOperations": {
               "type": "boolean",
               "default": false,
               "description": "Group transactions for better performance"
+            },
+            "gzip": {
+              "type": "boolean",
+              "default": false,
+              "description": "Compress the dump with gzip."
             },
             "ssl": {
               "type": "object",
