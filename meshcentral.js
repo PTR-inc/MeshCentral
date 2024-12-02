@@ -4227,7 +4227,7 @@ function mainStart() {
         if (config.settings.postgres != null) { modules.push('pg@8.13.1') } // Add Postgres, official driver.
         if (config.settings.mariadb != null) { modules.push('mariadb@3.2.2'); } // Add MariaDB, official driver.
         if (config.settings.acebase != null) { modules.push('acebase@1.29.5'); } // Add AceBase, official driver.
-        if (config.settings.sqlite3 != null) { if (config.settings.sqlite3.usebettersqlite3) { modules.push('better-sqlite3@11.5.0'); } else { modules.push('sqlite3@5.1.7'); } }; // Add sqlite3 or better-sqlite3, official driver.
+        if (config.settings.sqlite3 != null) { if (config.settings.sqlite3.usebettersqlite3) { modules.push('better-sqlite3@11.6.0'); } else { modules.push('sqlite3@5.1.7'); } }; // Add sqlite3 or better-sqlite3, official driver.
         if (config.settings.vault != null) { modules.push('node-vault@0.10.2'); } // Add official HashiCorp's Vault module.
         if (config.settings.plugins != null) { modules.push('semver@7.5.4'); } // Required for version compat testing and update checks
         if ((config.settings.plugins != null) && (config.settings.plugins.proxy != null)) { modules.push('https-proxy-agent@7.0.2'); } // Required for HTTP/HTTPS proxy support
