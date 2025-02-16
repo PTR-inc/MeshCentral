@@ -34,6 +34,7 @@ module.exports.CreateDB = function (parent, func) {
     const common = require('./common.js');
     const path = require('path');
     const fs = require('fs');
+    const crypto = require('crypto');
     const DB_NEDB = 1, DB_MONGOJS = 2, DB_MONGODB = 3,DB_MARIADB = 4, DB_MYSQL = 5, DB_POSTGRESQL = 6, DB_ACEBASE = 7, DB_SQLITE = 8;
     const DB_LIST = ['None', 'NeDB', 'MongoJS', 'MongoDB', 'MariaDB', 'MySQL', 'PostgreSQL', 'AceBase', 'SQLite'];  //for the info command
     let databaseName = 'meshcentral';
@@ -461,10 +462,10 @@ module.exports.CreateDB = function (parent, func) {
         if (typeof password != 'string') return null;
         let key;
         try {
-            key = parent.crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha384');
+            key = crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha384');
         } catch (ex) {
             // If this previous call fails, it's probably because older pbkdf2 did not specify the hashing function, just use the default.
-            key = parent.crypto.pbkdf2Sync(password, salt, iterations, 32);
+            key = crypto.pbkdf2Sync(password, salt, iterations, 32);
         }
         return key
     }
@@ -473,10 +474,10 @@ module.exports.CreateDB = function (parent, func) {
     obj.encryptData = function (password, plaintext) {
         let encryptionVersion = 0x01;
         let iterations = 100000
-        const iv = parent.crypto.randomBytes(16);
+        const iv = crypto.randomBytes(16);
         var key = obj.getEncryptDataKey(password, iv, iterations);
         if (key == null) return null;
-        const aes = parent.crypto.createCipheriv('aes-256-gcm', key, iv);
+        const aes = crypto.createCipheriv('aes-256-gcm', key, iv);
         var ciphertext = aes.update(plaintext);
         let versionbuf = Buffer.allocUnsafe(2);
         versionbuf.writeUInt16BE(encryptionVersion);
@@ -501,7 +502,7 @@ module.exports.CreateDB = function (parent, func) {
                     const data = ciphertextBytes.slice(38);
                     let key = obj.getEncryptDataKey(password, iv, iterations);
                     if (key == null) return null;
-                    const aes = parent.crypto.createDecipheriv('aes-256-gcm', key, iv);
+                    const aes = crypto.createDecipheriv('aes-256-gcm', key, iv);
                     aes.setAuthTag(authTag);
                     let plaintextBytes = Buffer.from(aes.update(data));
                     plaintextBytes = Buffer.concat([plaintextBytes, aes.final()]);
@@ -516,10 +517,10 @@ module.exports.CreateDB = function (parent, func) {
     // The older encryption system uses CBC without integraty checking.
     // This method is kept only for testing
     obj.oldEncryptData = function (password, plaintext) {
-        let key = parent.crypto.createHash('sha384').update(password).digest('raw').slice(0, 32);
+        let key = crypto.createHash('sha384').update(password).digest('raw').slice(0, 32);
         if (key == null) return null;
-        const iv = parent.crypto.randomBytes(16);
-        const aes = parent.crypto.createCipheriv('aes-256-cbc', key, iv);
+        const iv = crypto.randomBytes(16);
+        const aes = crypto.createCipheriv('aes-256-cbc', key, iv);
         var ciphertext = aes.update(plaintext);
         ciphertext = Buffer.concat([iv, ciphertext, aes.final()]);
         return ciphertext.toString('base64');
@@ -533,8 +534,8 @@ module.exports.CreateDB = function (parent, func) {
         try {
             const iv = ciphertextBytes.slice(0, 16);
             const data = ciphertextBytes.slice(16);
-            let key = parent.crypto.createHash('sha384').update(password).digest('raw').slice(0, 32);
-            const aes = parent.crypto.createDecipheriv('aes-256-cbc', key, iv);
+            let key = crypto.createHash('sha384').update(password).digest('raw').slice(0, 32);
+            const aes = crypto.createDecipheriv('aes-256-cbc', key, iv);
             let plaintextBytes = Buffer.from(aes.update(data));
             plaintextBytes = Buffer.concat([plaintextBytes, aes.final()]);
             return plaintextBytes;
@@ -674,8 +675,8 @@ module.exports.CreateDB = function (parent, func) {
     // Encrypt an object and return a base64.
     function performRecordEncrypt(plainobj) {
         if (obj.dbRecordsEncryptKey == null) return null;
-        const iv = parent.crypto.randomBytes(12);
-        const aes = parent.crypto.createCipheriv('aes-256-gcm', obj.dbRecordsEncryptKey, iv);
+        const iv = crypto.randomBytes(12);
+        const aes = crypto.createCipheriv('aes-256-gcm', obj.dbRecordsEncryptKey, iv);
         var ciphertext = aes.update(JSON.stringify(plainobj));
         var cipherfinal = aes.final();
         ciphertext = Buffer.concat([iv, aes.getAuthTag(), ciphertext, cipherfinal]);
@@ -688,7 +689,7 @@ module.exports.CreateDB = function (parent, func) {
         const ciphertextBytes = Buffer.from(ciphertext, 'base64');
         const iv = ciphertextBytes.slice(0, 12);
         const data = ciphertextBytes.slice(28);
-        const aes = parent.crypto.createDecipheriv('aes-256-gcm', obj.dbRecordsDecryptKey, iv);
+        const aes = crypto.createDecipheriv('aes-256-gcm', obj.dbRecordsDecryptKey, iv);
         aes.setAuthTag(ciphertextBytes.slice(12, 28));
         var plaintextBytes, r;
         try {
@@ -699,9 +700,15 @@ module.exports.CreateDB = function (parent, func) {
         return r;
     }
 
-    // Clone an object (TODO: Make this more efficient)
-    function Clone(v) { return JSON.parse(JSON.stringify(v)); }
-
+    // Clone an object (TODO: Make this more efficient) >> Use StructuredClone from v17 onward
+    let Clone;
+    if (process.versions.node.split('.')[0] >= '17'){
+        Clone = function (v) { return structuredClone(v); }
+    }
+    else {
+        Clone = function (v) { return JSON.parse(JSON.stringify(v)); }
+    }
+    
     // Read expiration time from configuration file
     if (typeof parent.args.dbexpire == 'object') {
         if (typeof parent.args.dbexpire.events == 'number') { expireEventsSeconds = parent.args.dbexpire.events; }
@@ -712,13 +719,13 @@ module.exports.CreateDB = function (parent, func) {
     // If a DB record encryption key is provided, perform database record encryption
     if ((typeof parent.args.dbrecordsencryptkey == 'string') && (parent.args.dbrecordsencryptkey.length != 0)) {
         // Hash the database password into a AES256 key and setup encryption and decryption.
-        obj.dbRecordsEncryptKey = obj.dbRecordsDecryptKey = parent.crypto.createHash('sha384').update(parent.args.dbrecordsencryptkey).digest('raw').slice(0, 32);
+        obj.dbRecordsEncryptKey = obj.dbRecordsDecryptKey = crypto.createHash('sha384').update(parent.args.dbrecordsencryptkey).digest('raw').slice(0, 32);
     }
 
     // If a DB record decryption key is provided, perform database record decryption
     if ((typeof parent.args.dbrecordsdecryptkey == 'string') && (parent.args.dbrecordsdecryptkey.length != 0)) {
         // Hash the database password into a AES256 key and setup encryption and decryption.
-        obj.dbRecordsDecryptKey = parent.crypto.createHash('sha384').update(parent.args.dbrecordsdecryptkey).digest('raw').slice(0, 32);
+        obj.dbRecordsDecryptKey = crypto.createHash('sha384').update(parent.args.dbrecordsdecryptkey).digest('raw').slice(0, 32);
     }
 
 
@@ -1249,10 +1256,10 @@ module.exports.CreateDB = function (parent, func) {
         // If a DB encryption key is provided, perform database encryption
         if ((typeof parent.args.dbencryptkey == 'string') && (parent.args.dbencryptkey.length != 0)) {
             // Hash the database password into a AES256 key and setup encryption and decryption.
-            obj.dbKey = parent.crypto.createHash('sha384').update(parent.args.dbencryptkey).digest('raw').slice(0, 32);
+            obj.dbKey = crypto.createHash('sha384').update(parent.args.dbencryptkey).digest('raw').slice(0, 32);
             datastoreOptions.afterSerialization = function (plaintext) {
-                const iv = parent.crypto.randomBytes(16);
-                const aes = parent.crypto.createCipheriv('aes-256-cbc', obj.dbKey, iv);
+                const iv = crypto.randomBytes(16);
+                const aes = crypto.createCipheriv('aes-256-cbc', obj.dbKey, iv);
                 var ciphertext = aes.update(plaintext);
                 ciphertext = Buffer.concat([iv, ciphertext, aes.final()]);
                 return ciphertext.toString('base64');
@@ -1261,7 +1268,7 @@ module.exports.CreateDB = function (parent, func) {
                 const ciphertextBytes = Buffer.from(ciphertext, 'base64');
                 const iv = ciphertextBytes.slice(0, 16);
                 const data = ciphertextBytes.slice(16);
-                const aes = parent.crypto.createDecipheriv('aes-256-cbc', obj.dbKey, iv);
+                const aes = crypto.createDecipheriv('aes-256-cbc', obj.dbKey, iv);
                 var plaintextBytes = Buffer.from(aes.update(data));
                 plaintextBytes = Buffer.concat([plaintextBytes, aes.final()]);
                 return plaintextBytes.toString();
@@ -4044,10 +4051,10 @@ module.exports.CreateDB = function (parent, func) {
         // If a DB encryption key is provided, perform database encryption
         if ((typeof parent.args.dbencryptkey == 'string') && (parent.args.dbencryptkey.length != 0)) {
             // Hash the database password into a AES256 key and setup encryption and decryption.
-            var nedbKey = parent.crypto.createHash('sha384').update(parent.args.dbencryptkey).digest('raw').slice(0, 32);
+            var nedbKey = crypto.createHash('sha384').update(parent.args.dbencryptkey).digest('raw').slice(0, 32);
             datastoreOptions.afterSerialization = function (plaintext) {
-                const iv = parent.crypto.randomBytes(16);
-                const aes = parent.crypto.createCipheriv('aes-256-cbc', nedbKey, iv);
+                const iv = crypto.randomBytes(16);
+                const aes = crypto.createCipheriv('aes-256-cbc', nedbKey, iv);
                 var ciphertext = aes.update(plaintext);
                 ciphertext = Buffer.concat([iv, ciphertext, aes.final()]);
                 return ciphertext.toString('base64');
@@ -4056,7 +4063,7 @@ module.exports.CreateDB = function (parent, func) {
                 const ciphertextBytes = Buffer.from(ciphertext, 'base64');
                 const iv = ciphertextBytes.slice(0, 16);
                 const data = ciphertextBytes.slice(16);
-                const aes = parent.crypto.createDecipheriv('aes-256-cbc', nedbKey, iv);
+                const aes = crypto.createDecipheriv('aes-256-cbc', nedbKey, iv);
                 var plaintextBytes = Buffer.from(aes.update(data));
                 plaintextBytes = Buffer.concat([plaintextBytes, aes.final()]);
                 return plaintextBytes.toString();
