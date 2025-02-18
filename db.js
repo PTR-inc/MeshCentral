@@ -621,34 +621,47 @@ module.exports.CreateDB = function (parent, func) {
         });
     }
 
-    // Encrypt an database object
+    // Decrypt a database object
     function performTypedRecordDecrypt(data) {
         if ((data == null) || (obj.dbRecordsDecryptKey == null) || (typeof data != 'object')) return data;
         for (var i in data) {
             if ((data[i] == null) || (typeof data[i] != 'object')) continue;
-            data[i] = performPartialRecordDecrypt(data[i]);
-            if ((data[i].intelamt != null) && (typeof data[i].intelamt == 'object') && (data[i].intelamt._CRYPT)) { data[i].intelamt = performPartialRecordDecrypt(data[i].intelamt); }
-            if ((data[i].amt != null) && (typeof data[i].amt == 'object') && (data[i].amt._CRYPT)) { data[i].amt = performPartialRecordDecrypt(data[i].amt); }
-            if ((data[i].kvm != null) && (typeof data[i].kvm == 'object') && (data[i].kvm._CRYPT)) { data[i].kvm = performPartialRecordDecrypt(data[i].kvm); }
+            if (data[i]._CRYPT) { data[i] = performPartialRecordDecrypt(data[i]); }
+            if (data[i].intelamt?._CRYPT) { data[i].intelamt = performPartialRecordDecrypt(data[i].intelamt); }
+            if (data[i].amt?._CRYPT) { data[i].amt = performPartialRecordDecrypt(data[i].amt); }
+            if (data[i].kvm?._CRYPT) { data[i].kvm = performPartialRecordDecrypt(data[i].kvm); }
+            if (data[i].hardware?.windows?.volumes) {
+                for (let j in data[i].hardware.windows.volumes) {
+                    if (data[i].hardware.windows.volumes[j]._CRYPT){
+                        data[i].hardware.windows.volumes[j] = performPartialRecordDecrypt(data[i].hardware.windows.volumes[j]);
+                    }
+                }
+            }
         }
         return data;
     }
 
-    // Encrypt an database object
+    // Encrypt a database object
     function performTypedRecordEncrypt(data) {
         if (obj.dbRecordsEncryptKey == null) return data;
-        if (data.type == 'user') { return performPartialRecordEncrypt(Clone(data), ['otpkeys', 'otphkeys', 'otpsecret', 'salt', 'hash', 'oldpasswords']); }
+        if (data.type == 'user') { return performPartialRecordEncrypt(data, ['otpkeys', 'otphkeys', 'otpsecret', 'salt', 'hash', 'oldpasswords']); }
         else if ((data.type == 'node') && (data.ssh || data.rdp || data.intelamt)) {
-            var xdata = Clone(data);
-            if (data.ssh || data.rdp) { xdata = performPartialRecordEncrypt(xdata, ['ssh', 'rdp']); }
-            if (data.intelamt) { xdata.intelamt = performPartialRecordEncrypt(xdata.intelamt, ['pass', 'mpspass']); }
-            return xdata;
+            if (data.ssh || data.rdp) { data = performPartialRecordEncrypt(data, ['ssh', 'rdp']); }
+            if (data.intelamt) { data.intelamt = performPartialRecordEncrypt(data.intelamt, ['pass', 'mpspass']); }
+            return data;
         }
         else if ((data.type == 'mesh') && (data.amt || data.kvm)) {
-            var xdata = Clone(data);
-            if (data.amt) { xdata.amt = performPartialRecordEncrypt(xdata.amt, ['password']); }
-            if (data.kvm) { xdata.kvm = performPartialRecordEncrypt(xdata.kvm, ['pass']); }
-            return xdata;
+            if (data.amt) { data.amt = performPartialRecordEncrypt(data.amt, ['password']); }
+            if (data.kvm) { data.kvm = performPartialRecordEncrypt(data.kvm, ['pass']); }
+            return data;
+        }
+        else if ( (data.type == 'sysinfo') && (data.hardware?.windows?.volumes) ) {
+            for (let i in data.hardware.windows.volumes) {
+                if (data.hardware.windows.volumes[i].recoveryPassword){
+                    data.hardware.windows.volumes[i] = performPartialRecordEncrypt(data.hardware.windows.volumes[i], ['recoveryPassword']);
+                }
+            }
+            return data;
         }
         return data;
     }
@@ -1853,10 +1866,9 @@ module.exports.CreateDB = function (parent, func) {
         } else if (obj.databaseType == DB_ACEBASE) {
             // Database actions on the main collection. AceBase: https://github.com/appy-one/acebase
             obj.Set = function (data, func) {
-                data = common.escapeLinksFieldNameEx(data);
-                var xdata = performTypedRecordEncrypt(data);
+                data = performTypedRecordEncrypt(common.escapeLinksFieldNameEx(data));
                 obj.dbCounters.fileSet++;
-                obj.file.ref('meshcentral').child(encodeURIComponent(xdata._id)).set(common.aceEscapeFieldNames(xdata)).then(function (ref) { if (func) { func(); } })
+                obj.file.ref('meshcentral').child(encodeURIComponent(data._id)).set(common.aceEscapeFieldNames(data)).then(function (ref) { if (func) { func(); } })
             };
             obj.Get = function (id, func) {
                 obj.file.ref('meshcentral').child(encodeURIComponent(id)).get(function (snapshot) {
@@ -2964,8 +2976,8 @@ module.exports.CreateDB = function (parent, func) {
             // Database actions on the main collection (NeDB and MongoJS)
             obj.Set = function (data, func) {
                 obj.dbCounters.fileSet++;
-                data = common.escapeLinksFieldNameEx(data);
-                var xdata = performTypedRecordEncrypt(data); obj.file.update({ _id: xdata._id }, xdata, { upsert: true }, func);
+                data = performTypedRecordEncrypt(common.escapeLinksFieldNameEx(data));
+                obj.file.update({ _id: data._id }, data, { upsert: true }, func);
             };
             obj.Get = function (id, func) {
                 if (arguments.length > 2) {
