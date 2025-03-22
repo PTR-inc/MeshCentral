@@ -39,6 +39,7 @@ module.exports.CreateDB = function (parent, func) {
     let databaseName = 'meshcentral';
     let datapathParentPath = path.dirname(parent.datapath);
     let datapathFoldername = path.basename(parent.datapath);
+    obj.dbConfig = {};
     const SQLITE_AUTOVACUUM = ['none', 'full', 'incremental'];
     const SQLITE_SYNCHRONOUS = ['off', 'normal', 'full', 'extra'];
     obj.sqliteConfig = {
@@ -71,7 +72,7 @@ module.exports.CreateDB = function (parent, func) {
     }
 
     // MongoDB bulk operations state
-    if (parent.config.settings.mongodbbulkoperations) {
+    if (obj.dbConfig.bulkOperations) {
         // Added counters
         obj.dbCounters.fileSetPending = 0;
         obj.dbCounters.fileSetBulk = 0;
@@ -952,30 +953,72 @@ module.exports.CreateDB = function (parent, func) {
     } else if (parent.args.mongodb) {
         // Use MongoDB
         obj.databaseType = DB_MONGODB;
+        let args=parent.config.settings.mongodb;
+        obj.dbConfig.dumpArg = '';
+        obj.dbConfig.gzip = '';
 
-        // If running an older NodeJS version, TextEncoder/TextDecoder is required
-        if (global.TextEncoder == null) { global.TextEncoder = require('util').TextEncoder; }
-        if (global.TextDecoder == null) { global.TextDecoder = require('util').TextDecoder; }
+        //check string or object config
+        switch (typeof(args)){
+            case 'string':
+                //org configstyle, assume without security/ssl etc in uri
+                obj.dbConfig.connectionstring = args;
+                obj.dbConfig.bulkOperations = parent.config.settings.mongodbbulkoperations ? true : false;
+                obj.dbConfig.changeStream = parent.config.settings.mongodbchangestream ? true : false;
+                obj.dbConfig.collection = parent.config.settings.mongodbcol ? parent.config.settings.mongodbcol : 'meshcentral';
+                obj.dbConfig.databaseName = parent.config.settings.mongodbname ? parent.config.settings.mongodbname : 'meshcentral';
+                obj.dbConfig.dumpArg = ' --uri=' + obj.dbConfig.connectionstring;
+                break;
+            case 'object':
+                //build seperate connection and mongodump arguments as mongodump doesn't support all uri parameters
+                obj.dbConfig.collection = args.collection ? args.collection : 'meshcentral';
+                obj.dbConfig.bulkOperations = args.bulkoperations ? true : false;
+                obj.dbConfig.changeStream = args.changestream ? true : false;
+                if (args.gzip) { obj.dbConfig.gzip = '.gz'; obj.dbConfig.dumpArg += ' --gzip'; }
+                obj.dbConfig.databaseName = args.databasename ? args.databasename : 'meshcentral';
+                obj.dbConfig.connectionstring = 'mongodb://';
+                if (args.user) {
+                    obj.dbConfig.connectionstring += encodeURIComponent(args.user) + ':' + encodeURIComponent(args.password) + '@';
+                    obj.dbConfig.dumpArg += ' --username=\"' + args.user + '\"' + ' --password=\"' + args.password + '\"';
+                }
+                obj.dbConfig.connectionstring += args.host + ':' + (args.port ? args.port : 27017) + '/' + obj.dbConfig.databaseName;
+                obj.dbConfig.dumpArg += ' --host=' + args.host + ' --port=' + (args.port ? args.port : 27017) + ' --db=' + obj.dbConfig.databaseName;
+                //let q = '?';
+                if (args.authenticationdatabase) {
+                    obj.dbConfig.connectionstring += '?authSource=' + args.authenticationdatabase;
+                    //q = '&'; //change connectionstring seperator
+                    obj.dbConfig.dumpArg += ' --authenticationDatabase=' + args.authenticationdatabase;
+                }
+                if (args.ssl) {
+                    obj.dbConfig.connectionstring += args.authenticationdatabase ? '&' : '?';
+                    //obj.dbConfig.connectionstring += `${q}tls=true`;
+                    obj.dbConfig.dumpArg += ' --ssl';
+                    if (args.ssl.dontcheckserveridentity) { obj.dbConfig.connectionstring += '&tlsAllowInvalidHostnames=true'; obj.dbConfig.dumpArg += ' --tlsInsecure --sslAllowInvalidHostnames'; };
+                    if (args.ssl.cacertpath) { obj.dbConfig.connectionstring += '&tlsCAFile=' + encodeURIComponent(path.resolve(args.ssl.cacertpath)); obj.dbConfig.dumpArg += ' --sslCAFile=\"' + path.resolve(args.ssl.cacertpath) + '\"'; };
+                    if (args.ssl.clientcertkeypath) { obj.dbConfig.connectionstring += '&tlsCertificateKeyFile=' + encodeURIComponent(path.resolve(args.ssl.clientcertkeypath)); obj.dbConfig.dumpArg += ' --sslPEMKeyFile=\"' + path.resolve(args.ssl.clientcertkeypath) + '\"'; };
+                }
+                break;
+            default:
+                console.error('Invalid arguments for MongoDB in config.json'); process.exit(0);
+        }
+        databaseName = obj.dbConfig.databaseName;
 
-        require('mongodb').MongoClient.connect(parent.args.mongodb, { useNewUrlParser: true, useUnifiedTopology: true, enableUtf8Validation: false }, function (err, client) {
-            if (err != null) { console.log("Unable to connect to database: " + err); process.exit(); return; }
+        require('mongodb-legacy').MongoClient.connect(obj.dbConfig.connectionstring, { enableUtf8Validation: false }, function (err, client) {
+            if (err != null) { console.log("Unable to connect to database: " + err); process.exit(0);}
             Datastore = client;
             parent.debug('db', 'Connected to MongoDB database...');
 
             // Get the database name and setup the database client
-            var dbname = 'meshcentral';
-            if (parent.args.mongodbname) { dbname = parent.args.mongodbname; }
-            const dbcollectionname = (parent.args.mongodbcol) ? (parent.args.mongodbcol) : 'meshcentral';
-            const db = client.db(dbname);
+            const dbcollectionname = obj.dbConfig.collection;
+            const db = client.db(obj.dbConfig.databaseName);
 
             // Check the database version
             db.admin().serverInfo(function (err, info) {
                 if ((err != null) || (info == null) || (info.versionArray == null) || (Array.isArray(info.versionArray) == false) || (info.versionArray.length < 2) || (typeof info.versionArray[0] != 'number') || (typeof info.versionArray[1] != 'number')) {
                     console.log('WARNING: Unable to check MongoDB version.');
                 } else {
-                    if ((info.versionArray[0] < 3) || ((info.versionArray[0] == 3) && (info.versionArray[1] < 6))) {
-                        // We are running with mongoDB older than 3.6, this is not good.
-                        parent.addServerWarning("Current version of MongoDB (" + info.version + ") is too old, please upgrade to MongoDB 3.6 or better.", true);
+                    if ((info.versionArray[0] < 6) ) {
+                        // We are running with mongoDB older than 6
+                        parent.addServerWarning("Current version of MongoDB (" + info.version + ") is end-of-life, please upgrade to MongoDB 6 or better.");
                     }
                 }
             });
@@ -998,7 +1041,7 @@ module.exports.CreateDB = function (parent, func) {
             });
 
             // Setup the changeStream on the MongoDB main collection if possible
-            if (parent.args.mongodbchangestream == true) {
+            if (obj.dbConfig.changeStream) {
                 obj.dbCounters.changeStream = { change: 0, update: 0, insert: 0, delete: 0 };
                 if (typeof obj.file.watch != 'function') {
                     console.log('WARNING: watch() is not a function, MongoDB ChangeStream not supported.');
@@ -1135,6 +1178,7 @@ module.exports.CreateDB = function (parent, func) {
     } else if (parent.args.xmongodb) {
         // Use MongoJS, this is the old system.
         obj.databaseType = DB_MONGOJS;
+        obj.dbConfig.dumpArg = ' --uri=' + parent.args.xmongodb;
         Datastore = require('mongojs');
         var db = Datastore(parent.args.xmongodb);
         var dbcollection = 'meshcentral';
@@ -2656,7 +2700,7 @@ module.exports.CreateDB = function (parent, func) {
             // Database actions on the main collection (MongoDB)
 
             // Bulk operations
-            if (parent.config.settings.mongodbbulkoperations) {
+            if (obj.dbConfig.bulkOperations) {
                 obj.Set = function (data, func) { // Fast Set operation using bulkWrite(), this is much faster then using replaceOne()
                     if (obj.filePendingSet == false) {
                         // Perform the operation now
@@ -2772,7 +2816,7 @@ module.exports.CreateDB = function (parent, func) {
             obj.GetUserWithVerifiedEmail = function (domain, email, func) { obj.file.find({ type: 'user', domain: domain, email: email, emailVerified: true }).toArray(function (err, docs) { func(err, performTypedRecordDecrypt(docs)); }); };
 
             // Bulk operations
-            if (parent.config.settings.mongodbbulkoperations) {
+            if (obj.dbConfig.bulkOperations) {
                 obj.Remove = function (id, func) { // Fast remove operation using a bulk find() to reduce round trips to the database.
                     if (obj.filePendingRemoves == null) {
                         // No pending removes, perform the operation now.
@@ -2817,7 +2861,7 @@ module.exports.CreateDB = function (parent, func) {
             obj.GetAllEvents = function (func) { obj.eventsfile.find({}).toArray(func); };
 
             // Bulk operations
-            if (parent.config.settings.mongodbbulkoperations) {
+            if (obj.dbConfig.bulkOperations) {
                 obj.StoreEvent = function (event, func) { // Fast MongoDB event store using bulkWrite()
                     if (obj.eventsFilePendingSet == false) {
                         // Perform the operation now
@@ -2884,7 +2928,7 @@ module.exports.CreateDB = function (parent, func) {
             obj.getAllPower = function (func) { obj.powerfile.find({}).toArray(func); };
 
             // Bulk operations
-            if (parent.config.settings.mongodbbulkoperations) {
+            if (obj.dbConfig.bulkOperations) {
                 obj.storePowerEvent = function (event, multiServer, func) { // Fast MongoDB event store using bulkWrite()
                     if (multiServer != null) { event.server = multiServer.serverid; }
                     if (obj.powerFilePendingSet == false) {
@@ -3313,20 +3357,6 @@ module.exports.CreateDB = function (parent, func) {
         return cmd;
     }
 
-    function buildMongoDumpCommand() {
-        const dburl = parent.args.mongodb;
-
-        var mongoDumpPath = 'mongodump';
-        if (parent.config.settings.autobackup && parent.config.settings.autobackup.mongodumppath) {
-            mongoDumpPath = path.normalize(parent.config.settings.autobackup.mongodumppath);
-        }
-
-        var cmd = '"' + mongoDumpPath + '"';
-        if (dburl) { cmd = '\"' + mongoDumpPath + '\" --uri=\"' + dburl + '\"'; }
-
-        return cmd;
-    }
-
     // Check that the server is capable of performing a backup
     // Tries configured custom location with fallback to default location
     // Now runs after autobackup config init in meshcentral.js so config options are checked
@@ -3372,13 +3402,23 @@ module.exports.CreateDB = function (parent, func) {
         // Check database dumptools
         if ((obj.databaseType == DB_MONGOJS) || (obj.databaseType == DB_MONGODB)) {
             // Check that we have access to MongoDump
-            var cmd = buildMongoDumpCommand();
+            obj.dbConfig.dumpCommand = 'mongodump';
+            //only resolve non-default config paths so dumpshell can use system paths, also exclude mongodump.exe
+            if (parent.config.settings.autobackup && parent.config.settings.autobackup.mongodumppath && !((parent.config.settings.autobackup.mongodumppath).startsWith('mongodump')) ) {
+                obj.dbConfig.dumpCommand = path.resolve(parent.config.settings.autobackup.mongodumppath);
+            } else if (parent.config.settings.autobackup && typeof (parent.config.settings.autobackup.mongodumppath) == 'string') {obj.dbConfig.dumpCommand = parent.config.settings.autobackup.mongodumppath; }
+            //quotes for space
+            obj.dbConfig.dumpCommand = '\"' + obj.dbConfig.dumpCommand + '\"';
+
+            let cmd = obj.dbConfig.dumpCommand + ' ' + obj.dbConfig.dumpArg;
             cmd += (parent.platform == 'win32') ? ' --archive=\"nul\"' : ' --archive=\"/dev/null\"';
             const child_process = require('child_process');
-            child_process.exec(cmd, { cwd: backupPath }, function (error, stdout, stderr) {
-                if ((error != null) && (error != '')) {
-                        func(1, "Unable to find mongodump tool, backup will not be performed. Command tried: " + cmd);
-                        return;
+            //add timeout of 1m. If an incorrect configuration is used, mongodump can hang indefinitely?
+            //Kills the shell, not the mongodump process sadly, but signals to not autobackup
+            child_process.exec(cmd, { cwd: backupPath, timeout: 60000}, function (error, stdout, stderr) {
+                if (((error != null) && (error != '')) || (stderr.includes('error'))) {
+                    func(1, "Unable to mongodump, MongoDB database auto-backup will not be performed. Error: " + stderr);
+                    parent.config.settings.autobackup.backupintervalhours = -2;
                 } else {parent.config.settings.autobackup.backupintervalhours = backupInterval;}
             });
         } else if ((obj.databaseType == DB_MARIADB) || (obj.databaseType == DB_MYSQL)) {
@@ -3526,7 +3566,22 @@ module.exports.CreateDB = function (parent, func) {
         parent.debug('backup','Entering performBackup');
         try {
             if (obj.performingBackup) return 'Backup alreay in progress.';
-            if (parent.config.settings.autobackup.backupintervalhours == -1) { if (func) { func('Backup disabled.'); return 'Backup disabled.' }};
+            if (parent.config.settings.autobackup.backupintervalhours <= 0) {
+                if (func) {
+                    switch (parent.config.settings.autobackup.backupintervalhours) {
+                        case 0:
+                            func('No autobackup configured.');
+                            break;
+                        case -1:
+                            func('Unable to create backup if backuppath is set to the data folder.');
+                            break;
+                        case -2:
+                            func('Unable to create databasebackup.');
+                            break;
+                    }
+                }
+                return 'Backup disabled.';
+            }
             obj.performingBackup = true;
             let backupPath = parent.backuppath;
             let dataPath = parent.datapath;
@@ -3538,14 +3593,8 @@ module.exports.CreateDB = function (parent, func) {
 
             if ((obj.databaseType == DB_MONGOJS) || (obj.databaseType == DB_MONGODB)) {
                 // Perform a MongoDump
-                const dbname = (parent.args.mongodbname) ? (parent.args.mongodbname) : 'meshcentral';
-                const dburl = parent.args.mongodb;
-    
-                obj.newDBDumpFile = path.join(backupPath, (dbname + '-mongodump-' + fileSuffix + '.archive'));
-
-                var cmd = buildMongoDumpCommand();
-                cmd += (dburl) ? ' --archive=\"' + obj.newDBDumpFile + '\"' :
-                                 ' --db=\"' + dbname + '\" --archive=\"' + obj.newDBDumpFile + '\"';
+                obj.newDBDumpFile = path.join(backupPath, (databaseName + '-mongodump-' + fileSuffix + '.archive' + obj.dbConfig.gzip));
+                let cmd = obj.dbConfig.dumpCommand + obj.dbConfig.dumpArg + ' --archive=\"' + obj.newDBDumpFile + '\"';
                 parent.debug('backup','Mongodump cmd: ' + cmd);
                 const child_process = require('child_process');
                 const dumpProcess = child_process.exec(

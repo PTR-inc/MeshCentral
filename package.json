@@ -36,6 +36,12 @@
     "sample-config.json",
     "sample-config-advanced.json"
   ],
+  "//": "Pin to driver v6.9, see https://github.com/mongodb/node-mongodb-native/releases/tag/v6.10.0, support for mongodb 3.6 dropped",
+  "overrides": {
+    "mongodb-legacy": {
+      "mongodb": "6.9"
+    }
+  },
   "dependencies": {
     "@seald-io/nedb": "4.0.4",
     "archiver": "7.0.1",
