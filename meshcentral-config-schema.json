@@ -34,28 +34,49 @@
               "default": 27017,
               "description": "MongoDB port number"
             },
-            "user": {
-              "type": "string",
-              "description": "MongoDB username"
-            },
-            "password": {
-              "type": "string",
-              "description": "MongoDB password"
+            "auth": {
+              "type": "object",
+              "description": "Authentication related options",
+              "properties": {
+                "user": {
+                  "type": "string",
+                  "description": "MongoDB username (special characters will be URIencoded)"
+                },
+                "password": {
+                  "type": "string",
+                  "description": "MongoDB password (special characters will be URIencoded)"
+                },
+                "authenticationDatabase": {
+                  "type": "string",
+                  "default": "(databaseName)",
+                  "description": "Database where the user resides"
+                },
+                "authenticationMechanism": {
+                  "type": "string",
+                  "default": null,
+                  "description": "Specify the authentication mechanism that MongoDB uses to authenticate the connection. MongoDB defaults to SCRAM-SHA-256 with fallback to SCRAM-SHA-1"
+                },
+                "authenticationMechanismProperties": {
+                  "type": "string",
+                  "default": null,
+                  "description": "See: https://www.mongodb.com/docs/manual/reference/connection-string-options/#mongodb-urioption-urioption.authMechanismProperties"
+                }      
+              }
             },
             "databaseName": {
               "type": "string",
               "default": "meshcentral",
               "description": "Name of MongoDB database used"
             },
-            "authenticationDatabase": {
-              "type": "string",
-              "default": null,
-              "description": "Database where the user resides, default mongo uses the database connecting to"
-            },
             "collection": {
               "type": "string",
               "default": "meshcentral",
               "description": "MongoDB collection, default 'meshcentral'."
+            },
+            "replicaSet": {
+              "type": "string",
+              "default": null,
+              "description": "Replicaset to use"
             },
             "changeStream": {
               "type": "boolean",
@@ -67,25 +88,25 @@
               "default": false,
               "description": "Group transactions for better performance"
             },
-            "gzip": {
-              "type": "boolean",
-              "default": false,
-              "description": "Compress the dump with gzip."
-            },
-            "ssl": {
+            "tls": {
               "type": "object",
-              "description": "SSL Options.",
+              "description": "TLS/SSL Options",
               "properties": {
-                "caCertPath": {
+                "CAFile": {
                   "type": "string",
-                  "description": "Path to the CA certificate. Required for self-signed certificates"
+                  "description": "Path to the CA certificate file. Required for self-signed certificates"
                 },
-                "clientCertKeyPath": {
+                "certificateKeyFile": {
                   "type": "string",
-                  "description": "Path to the client certificate. This must include the key."
+                  "description": "Path to the client certificate file. This must include the key."
+                },
+                "certificateKeyFilePassword": {
+                  "type": "string",
+                  "description": "Password to de-crypt the certificateKeyFile"
                 },
                 "dontCheckServerIdentity": {
                   "type": "boolean",
+                  "default": false,
                   "description": "Set true to not check the server hostname during verification"
                 }
               }
