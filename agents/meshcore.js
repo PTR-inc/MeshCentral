@@ -1342,6 +1342,7 @@ function handleServerCommand(data) {
                                 tunnel.consentAutoAcceptIfTerminalLocked = (tunnel.soptions && (tunnel.soptions.consentAutoAcceptIfTerminalLocked === true));
                                 tunnel.consentAutoAcceptIfFileLocked = (tunnel.soptions && (tunnel.soptions.consentAutoAcceptIfFileLocked === true));
                                 tunnel.oldStyle = (tunnel.soptions && tunnel.soptions.oldStyle) ? tunnel.soptions.oldStyle : false;
+                                tunnel.terminalUserVariable = (tunnel.soptions && tunnel.soptions.terminalUserVariable) ? tunnel.soptions.terminalUserVariable : false;
                                 tunnel.tcpaddr = data.tcpaddr;
                                 tunnel.tcpport = data.tcpport;
                                 tunnel.udpaddr = data.udpaddr;
@@ -2716,7 +2717,15 @@ function terminal_promise_consent_resolved()
             var env = { HISTCONTROL: 'ignoreboth' };
             if (process.env['LANG']) { env['LANG'] = process.env['LANG']; }
             if (process.env['PATH']) { env['PATH'] = process.env['PATH']; }
-            env['MESHCENTRAL_USER'] = (this.httprequest.userid ? this.httprequest.userid.split('/')[2] : (this.httprequest.guestuserid ? 'deviceshare:' + this.httprequest.guestuserid.split('/')[2] : 'unknown'));
+            if (typeof this.httprequest.terminalUserVariable == 'string' && this.httprequest.terminalUserVariable != '') {
+                if (this.httprequest.terminalUserVariable == 'realname') {
+                    env['MESHCENTRAL_USER'] = (this.httprequest.realname ? this.httprequest.realname : 'unknown');
+                } else if (this.httprequest.terminalUserVariable == 'identifier') {
+                    env['MESHCENTRAL_USER'] = (this.httprequest.userid ? this.httprequest.userid : (this.httprequest.guestuserid ? 'deviceshare:' + this.httprequest.guestuserid : 'unknown'));
+                } else if (this.httprequest.terminalUserVariable == 'username') {
+                    env['MESHCENTRAL_USER'] = (this.httprequest.username ? this.httprequest.username : 'unknown');
+                }
+            }
             if (this.httprequest.xoptions)
             {
                 if (this.httprequest.xoptions.rows) { env.LINES = ('' + this.httprequest.xoptions.rows); }
