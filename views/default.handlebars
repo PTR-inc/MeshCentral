@@ -2938,8 +2938,12 @@
                     }
                     break;
                 }
-                case 'downloadbackup': {
-                    server_showBackupDlgUpdate(message.data);
+                case 'backuprestore': {
+                    if (message.dialog == 'backup') {
+                        server_showBackupDlgUpdate(message.data);
+                    } else {
+                        server_showRestoreDlgUpdate(message.data);
+                    }
                     break;
                 }
                 case 'serverversion': {
@@ -13690,12 +13694,11 @@
         function server_showBackupDlg() {
             if (xxdialogMode) return false;
             // check for password in config.json and pass it to server_showBackupDlgUpdate
-            meshserver.send({ action: 'serverdownloadbackup', check: true });
+            meshserver.send({ action: 'serverbackuppassword', check: true, dialog: 'backup' });
             return false;
         }
         function server_showBackupDlgUpdate(configPassword) {
             var x = "Enter optional password for the backup" + '<br /><br />';
-            x += "NB: only unencrypted NeDB backups can be online restored" + '<br /><br />';
             x += '<tr><td align=right>' + nobreak("Password:") + '</td><td><input id=dbackup_password style=width:256px maxlength=256 type=password name=backup_password autocomplete=off/> <b></b></td></tr>';
             x += '<div><label><input id=doverrulepw type=checkbox ' + (configPassword?'':'disabled') + ' /> ' + "Use config.json password" + '</label></div>';
             setDialogMode(2, "Download backup", 3, backup_enterPassword, x);
@@ -13703,28 +13706,36 @@
             return false;
         }
         function backup_enterPassword() {
-            meshserver.send({ action: 'serverdownloadbackup', check: false, password: Q('dbackup_password').value, override: Q('doverrulepw').checked });
+            meshserver.send({ action: 'serverbackuppassword', check: false, password: Q('dbackup_password').value, override: Q('doverrulepw').checked });
             window.location.href = "{{{domainurl}}}backup.zip" + ((urlargs.key)?('?key=' + urlargs.key):'');
         }
 
-        function server_showRestoreDlg() {
+        function server_showRestoreDlg(){
+            if (xxdialogMode) return false;
+            // check for password in config.json and pass it to server_showRestoreDlgUpdate
+            meshserver.send({ action: 'serverbackuppassword', check: true, dialog: 'restore' });
+            return false;
+        }
+        function server_showRestoreDlgUpdate(configPassword) {
             if (xxdialogMode) return false;
             var x = "Restore the server using a backup," + ' <span style=color:red>' + "this will delete the existing server data." + '</span> ' + "Only do this if you know what you are doing." + '<br /><br />';
             x += '<form action="/restoreserver.ashx' + ((urlargs.key)?('?key=' + urlargs.key):'') + '" enctype="multipart/form-data" method="post"><div>';
             x += '<input type=hidden name=auth value=' + authCookie + '>';
-            x += "NB: only unencrypted NeDB backups can be online restored" + '<br /><br />';
             x += '<input id=account_dlgFileInput type=file name=datafile style=width:100% accept=".zip,application/octet-stream,application/zip,application/x-zip,application/x-zip-compressed" onchange=account_validateServerRestore()><br /><br />';
-            // x += '<tr><td align=left>' + nobreak("Backuppassword: ") + '</td><td><input id=drestore_password style=width:200px maxlength=256 type=password name=restore_password autocomplete=off/> <b></b></td></tr><br /><br />';
+            x += '<tr><tr><td align=left>' + nobreak("Backuppassword: ") + '</td><td><input id=drestore_password style=width:200px maxlength=256 type=password name=restore_password autocomplete=off/> <b></b></td></tr><br />';
+            x += '<div><label><input id=drestoreoverrulepw type=checkbox ' + (configPassword?'':'disabled') + ' /> ' + "Use config.json password" + '</label></div>';
             x += '<input id=account_dlgCancelButton type=button value=' + "Cancel" + ' style=float:right;width:80px;margin-left:5px onclick=dialogclose(0)>';
             x += '<input id=account_dlgOkButton type=submit value=' + "OK" + ' style=float:right;width:80px onclick=dialogclose(1)>';
             x += '</div><br /><br /></form>';
-            setDialogMode(2, "Restore Server", 0, null, x);
+            setDialogMode(2, "Restore Server", 0, restore_enterPassword, x);
             account_validateServerRestore();
             return false;
         }
-
         function account_validateServerRestore() {
             QE('account_dlgOkButton', Q('account_dlgFileInput').files.length == 1);
+        }
+        function restore_enterPassword() {
+            meshserver.send({ action: 'serverbackuppassword', check: false, password: Q('drestore_password').value, override: Q('drestoreoverrulepw').checked });
         }
 
         function server_showVersionDlg() {

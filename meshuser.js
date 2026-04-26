@@ -5718,7 +5718,7 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
         'serverconsole': serverCommandServerConsole,
         'servererrors': serverCommandServerErrors,
         'serverconfig': serverCommandServerConfig,
-        'serverdownloadbackup': serverCommandServerDownloadBackup,
+        'serverbackuppassword': serverCommandServerBackuppassword,
         'serverstats': serverCommandServerStats,
         'servertimelinestats': serverCommandServerTimelineStats,
         'serverupdate': serverCommandServerUpdate,
@@ -6524,14 +6524,12 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
         parent.parent.DispatchEvent(['*', 'server-users', user._id], obj, event);
     }
 
-    function serverCommandServerDownloadBackup(command) {
+    function serverCommandServerBackuppassword(command) {
         if (command.check) {
             //check for existing config.json password for requestercheckbox
-            obj.send({ action: 'downloadbackup', data: (Object.hasOwn(parent.parent.config.settings.autobackup, 'zippassword')) });
-        } else {
-            if (!command.override) {
-                parent.parent.config.settings.autobackup.zippasswordrequest = command.password;
-            }
+            obj.send({ action: 'backuprestore', data: (Object.hasOwn(parent.parent.config.settings.autobackup, 'zippassword')), dialog: command.dialog });
+        } else {       
+            parent.parent.config.settings.autobackup.zippasswordrequest = command.override ? parent.parent.config.settings.autobackup.zippassword : command.password;
         }
     }
 
