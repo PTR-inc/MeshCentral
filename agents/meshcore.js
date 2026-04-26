@@ -3983,6 +3983,11 @@ function onTunnelControlData(data, ws) {
         case 'close': {
             // We received the close on the websocket
             //sendConsoleText('Tunnel #' + ws.tunnel.index + ' WebSocket control close');
+            // Attempt to send EOF (Ctrl-D) multiple times to exit nested shells (screen, su, etc.) cleanly,
+            // This allows the shell to write its history before the process is killed
+            if (process.platform != 'win32' && ws.httprequest && ws.httprequest.process && ws.httprequest.process.stdin) {
+                try { ws.httprequest.process.stdin.write('\x04\x04\x04'); } catch (ex) { }
+            }
             try { ws.close(); } catch (ex) { }
             break;
         }
