@@ -22,3 +22,10 @@ jobs:
       - name: Print release output
         if: ${{ steps.release.outputs.released == 'true' }}
         run: echo Release ID ${{ steps.release.outputs.release_id }}
+      - name: Trigger Docker builds
+        if: ${{ steps.release.outputs.released == 'true' }}
+        run: |
+          gh workflow run docker-alpine.yml -r ${{ steps.release.outputs.release_tag }}
+          gh workflow run docker-debian.yml -r ${{ steps.release.outputs.release_tag }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
