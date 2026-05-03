@@ -611,9 +611,7 @@ function CreateMeshCentralServer(config, args) {
         if (!startArgs.includes('--disable-proto=delete')) { startArgs.unshift('--disable-proto=delete'); }
         childProcess = child_process.execFile(process.argv[0], startArgs, { maxBuffer: Infinity, cwd: obj.parentpath }, function (error, stdout, stderr) {
             if (childProcess.xrestart == 1) {
-                setTimeout(function () { 
-                    console.log('Restarting server (1)');
-                    obj.launchChildServer(startArgs); }, 500); // This is an expected restart.
+                setTimeout(function () { obj.launchChildServer(startArgs); }, 500); // This is an expected restart.
             } else if (childProcess.xrestart == 2) {
                 console.log('Expected exit...');
                 process.exit(); // User CTRL-C exit.

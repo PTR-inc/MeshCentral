@@ -14959,8 +14959,8 @@
         function server_showBackupDlgUpdate(configPassword) {
             var x = "Enter optional password for the backup" + '<br /><br />';
             x += '<tr><td align=right>' + nobreak("Password: ") + '</td><td><input id=dbackup_password style=width:256px maxlength=256 type=password name=backup_password autocomplete=off/> <b></b></td></tr>';
-            x += '<div><label><input id=doverrulepw type=checkbox ' + (configPassword?'':'disabled') + ' /> ' + "Use config.json password" + '</label></div>';
-            setModalContent('xxAddAgent', "Download Backup", x);
+            x += '<div><label><input id=doverrulepw type=checkbox ' + (configPassword?'':'disabled') + ' /> ' + "Use System Password" + '</label></div>';
+            setModalContent('xxAddAgent', "Download server backup", x);
             showModal('xxAddAgentModal', 'idx_dlgOkButton', () => backup_enterPassword());
             Q('dbackup_password').focus();
             return false;
@@ -14981,9 +14981,9 @@
             var x = "Restore the server using a backup," + ' <span style=color:red>' + "this will delete the existing server data." + '</span> ' + "Only do this if you know what you are doing." + '<br /><br />';
             x += '<div>';
             x += '<input id=account_dlgFileInput type=file name=datafile class="form-control" accept=".zip,application/octet-stream,application/zip,application/x-zip,application/x-zip-compressed" onchange=account_validateServerRestore()>';
-            x += '<tr><br><td align=right>' + nobreak("Backuppassword: ") + '</td><td><input id=drestore_password style=width:256px maxlength=256 type=password name=restore_password autocomplete=off/> <b></b></td></tr>';
+            x += '<tr><br><td align=right>' + nobreak("Backup password: ") + '</td><td><input id=drestore_password style=width:256px maxlength=256 type=password name=restore_password autocomplete=off/> <b></b></td></tr>';
             x += '</div>';
-            x += '<div><label><input id=drestoreoverrulepw type=checkbox ' + (configPassword?'':'disabled') + ' /> ' + "Use config.json password" + '</label></div>';
+            x += '<div><label><input id=drestoreoverrulepw type=checkbox ' + (configPassword?'':'disabled') + ' /> ' + "Use System Password" + '</label></div>';
             setModalContent('xxAddAgent', "Restore Server", x);
             showModal('xxAddAgentModal', 'idx_dlgOkButton', () => server_uploadServerRestore());
             account_validateServerRestore();
