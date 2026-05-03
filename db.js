@@ -49,6 +49,7 @@ module.exports.CreateDB = function (parent, func) {
         journalMode: 'delete',
         journalSize: 4096000,
         synchronous: 'full',
+        useBetterSQLite3: false
     };
     obj.performingBackup = false;
     const BACKUPFAIL_ZIPCREATE = 0x0001;
@@ -155,21 +156,34 @@ module.exports.CreateDB = function (parent, func) {
                 });
             });
         } else if (obj.databaseType == DB_SQLITE) { // SQLite3
-            //sqlite does not return rows affected for INSERT, UPDATE or DELETE statements, see https://www.sqlite.org/pragma.html#pragma_count_changes
-            obj.file.serialize(function () {
-                obj.file.run('DELETE FROM events WHERE time < ?', [new Date(Date.now() - (expireEventsSeconds * 1000))]); 
-                obj.file.run('DELETE FROM power WHERE time < ?', [new Date(Date.now() - (expirePowerEventsSeconds * 1000))]);
-                obj.file.run('DELETE FROM serverstats WHERE expire < ?', [new Date()]);
-                obj.file.run('DELETE FROM smbios WHERE expire < ?', [new Date()]);
-                obj.file.exec(obj.sqliteConfig.maintenance, function (err) {
-                    if (err) {console.log('Maintenance error: ' + err.message)};
-                    if (parent.config.settings.debug) {
-                        sqliteGetPragmas(['freelist_count', 'page_size', 'page_count', 'cache_size' ], function (pragma, pragmaValue) {
-                            parent.debug('db', 'SQLite Maintenance: ' + pragma + '=' + pragmaValue);
-                        });
-                    };
-                });
-            });
+            if (obj.sqliteConfig.useBetterSQLite3) {
+                let stmt = obj.file.prepare(`DELETE FROM events WHERE time < ${Date.now() - (expireEventsSeconds * 1000)};`);
+                let changedRows = (stmt.run()).changes;
+                stmt = obj.file.prepare(`DELETE FROM power WHERE time < ${Date.now() - (expirePowerEventsSeconds * 1000)};`);
+                changedRows += (stmt.run()).changes;
+                stmt = obj.file.prepare(`DELETE FROM serverstats WHERE expire < ${Date.now()};`);
+                changedRows += (stmt.run()).changes;
+                stmt = obj.file.prepare(`DELETE FROM smbios WHERE expire < ${Date.now()};`)
+                changedRows += (stmt.run()).changes;
+                obj.file.exec(obj.sqliteConfig.maintenance);
+                parent.debug('db', `SQLite maintenance: ${changedRows} rows deleted`);
+            } else {
+                //sqlite does not return rows affected for INSERT, UPDATE or DELETE statements, see https://www.sqlite.org/pragma.html#pragma_count_changes
+                obj.file.serialize(function () {
+                    obj.file.run('DELETE FROM events WHERE time < ?', [new Date(Date.now() - (expireEventsSeconds * 1000))]); 
+                    obj.file.run('DELETE FROM power WHERE time < ?', [new Date(Date.now() - (expirePowerEventsSeconds * 1000))]);
+                    obj.file.run('DELETE FROM serverstats WHERE expire < ?', [new Date()]);
+                    obj.file.run('DELETE FROM smbios WHERE expire < ?', [new Date()]);
+                    obj.file.exec(obj.sqliteConfig.maintenance, function (err) {
+                        if (err) {console.log('Maintenance error: ' + err.message)};
+                        if (parent.config.settings.debug) {
+                            sqliteGetPragmas(['freelist_count', 'page_size', 'page_count', 'cache_size' ], function (pragma, pragmaValue) {
+                                parent.debug('db', 'SQLite Maintenance: ' + pragma + '=' + pragmaValue);
+                            });
+                        };
+                    });
+                });                
+            }
         }
         obj.removeInactiveDevices();
     }
@@ -782,8 +796,9 @@ module.exports.CreateDB = function (parent, func) {
     if (parent.args.sqlite3) {
         // SQLite3 database setup
         obj.databaseType = DB_SQLITE;
-        const sqlite3 = require('sqlite3');
         let configParams = parent.config.settings.sqlite3;
+        obj.sqliteConfig.useBetterSQLite3 = (configParams.usebettersqlite3 || configParams.usebettersqlite3 == 'true') ? true : false;
+        const sqlite3 = obj.sqliteConfig.useBetterSQLite3 ? require('better-sqlite3') : require('sqlite3');
         if (typeof configParams == 'string') {databaseName = configParams} else {databaseName = configParams.name ? configParams.name : 'meshcentral';};
         obj.sqliteConfig.startupVacuum = configParams.startupvacuum ? configParams.startupvacuum : false;
         obj.sqliteConfig.autoVacuum = configParams.autovacuum ? configParams.autovacuum.toLowerCase() : 'incremental';
@@ -799,56 +814,65 @@ module.exports.CreateDB = function (parent, func) {
         obj.sqliteConfig.maintenance += 'PRAGMA optimize;';
         
         parent.debug('db', 'SQlite config options: ' + JSON.stringify(obj.sqliteConfig, null, 4));
-        if (obj.sqliteConfig.journalMode == 'memory') { console.log('[WARNING] journal_mode=memory: this can lead to database corruption if there is a crash during a transaction. See https://www.sqlite.org/pragma.html#pragma_journal_mode') };
-        //.cached not usefull
-        obj.file = new sqlite3.Database(path.join(parent.datapath, databaseName + '.sqlite'), sqlite3.OPEN_READWRITE, function (err) {
-            if (err && (err.code == 'SQLITE_CANTOPEN')) {
-                // Database needs to be created
-                obj.file = new sqlite3.Database(path.join(parent.datapath, databaseName + '.sqlite'), function (err) {
-                    if (err) { console.log("SQLite Error: " + err); process.exit(1); }
-                    obj.file.exec(`
-                        CREATE TABLE main (id VARCHAR(256) PRIMARY KEY NOT NULL, type CHAR(32), domain CHAR(64), extra CHAR(255), extraex CHAR(255), doc JSON);
-                        CREATE TABLE events(id INTEGER PRIMARY KEY, time TIMESTAMP, domain CHAR(64), action CHAR(255), nodeid CHAR(255), userid CHAR(255), doc JSON);
-                        CREATE TABLE eventids(fkid INT NOT NULL, target CHAR(255), CONSTRAINT fk_eventid FOREIGN KEY (fkid) REFERENCES events (id) ON DELETE CASCADE ON UPDATE RESTRICT);
-                        CREATE TABLE serverstats (time TIMESTAMP PRIMARY KEY, expire TIMESTAMP, doc JSON);
-                        CREATE TABLE power (id INTEGER PRIMARY KEY, time TIMESTAMP, nodeid CHAR(255), doc JSON);
-                        CREATE TABLE smbios (id CHAR(255) PRIMARY KEY, time TIMESTAMP, expire TIMESTAMP, doc JSON);
-                        CREATE TABLE plugin (id INTEGER PRIMARY KEY, doc JSON);
-                        CREATE TABLE pluginpermissions (id VARCHAR(255) PRIMARY KEY, doc JSON);
-                        CREATE INDEX ndxtypedomainextra ON main (type, domain, extra);
-                        CREATE INDEX ndxextra ON main (extra);
-                        CREATE INDEX ndxextraex ON main (extraex);
-                        CREATE INDEX ndxeventstime ON events(time);
-                        CREATE INDEX ndxeventsusername ON events(domain, userid, time);
-                        CREATE INDEX ndxeventsdomainnodeidtime ON events(domain, nodeid, time);
-                        CREATE INDEX ndxeventids ON eventids(target);
-                        CREATE INDEX ndxserverstattime ON serverstats (time);
-                        CREATE INDEX ndxserverstatexpire ON serverstats (expire);
-                        CREATE INDEX ndxpowernodeidtime ON power (nodeid, time);
-                        CREATE INDEX ndxsmbiostime ON smbios (time);
-                        CREATE INDEX ndxsmbiosexpire ON smbios (expire);
-                        `, function (err) {
-                            // Completed DB creation of SQLite3
-                            sqliteSetOptions(func);
-                            //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
-                            setupFunctions(func);
-                        }
-                    );
-                });
-                return;
-            } else if (err) { console.log("SQLite Error: " + err); process.exit(0); }
-
-            //for existing db's
-            sqliteSetOptions();
-            // Create any missing tables (e.g., pluginpermissions added in updates)
-            obj.file.exec(`
-                CREATE TABLE IF NOT EXISTS pluginpermissions (id VARCHAR(255) PRIMARY KEY, doc JSON)
-            `, function (err) {
-                if (err) { console.log("SQLite Error creating pluginpermissions table: " + err); }
+        if (obj.sqliteConfig.journalMode == 'memory') { parent.addServerWarning("[WARNING] journal_mode=memory: this can lead to database corruption if there is a crash during a transaction. See https://www.sqlite.org/pragma.html#pragma_journal_mode") };
+        const queryCreateTables = `
+                    CREATE TABLE if not exists main (id VARCHAR(256) PRIMARY KEY NOT NULL, type CHAR(32), domain CHAR(64), extra CHAR(255), extraex CHAR(255), doc JSON);
+                    CREATE TABLE if not exists events(id INTEGER PRIMARY KEY, time TIMESTAMP, domain CHAR(64), action CHAR(255), nodeid CHAR(255), userid CHAR(255), doc JSON);
+                    CREATE TABLE if not exists eventids(fkid INT NOT NULL, target CHAR(255), CONSTRAINT fk_eventid FOREIGN KEY (fkid) REFERENCES events (id) ON DELETE CASCADE ON UPDATE RESTRICT);
+                    CREATE TABLE if not exists serverstats (time TIMESTAMP PRIMARY KEY, expire TIMESTAMP, doc JSON);
+                    CREATE TABLE if not exists power (id INTEGER PRIMARY KEY, time TIMESTAMP, nodeid CHAR(255), doc JSON);
+                    CREATE TABLE if not exists smbios (id CHAR(255) PRIMARY KEY, time TIMESTAMP, expire TIMESTAMP, doc JSON);
+                    CREATE TABLE if not exists plugin (id INTEGER PRIMARY KEY, doc JSON);
+                    CREATE TABLE if not exists pluginpermissions (id VARCHAR(255) PRIMARY KEY, doc JSON);
+                    CREATE INDEX if not exists ndxtypedomainextra ON main (type, domain, extra);
+                    CREATE INDEX if not exists ndxextra ON main (extra);
+                    CREATE INDEX if not exists ndxextraex ON main (extraex);
+                    CREATE INDEX if not exists ndxeventstime ON events(time);
+                    CREATE INDEX if not exists ndxeventsusername ON events(domain, userid, time);
+                    CREATE INDEX if not exists ndxeventsdomainnodeidtime ON events(domain, nodeid, time);
+                    CREATE INDEX if not exists ndxeventids ON eventids(target);
+                    CREATE INDEX if not exists ndxserverstattime ON serverstats (time);
+                    CREATE INDEX if not exists ndxserverstatexpire ON serverstats (expire);
+                    CREATE INDEX if not exists ndxpowernodeidtime ON power (nodeid, time);
+                    CREATE INDEX if not exists ndxsmbiostime ON smbios (time);
+                    CREATE INDEX if not exists ndxsmbiosexpire ON smbios (expire);
+                    `;
+        if (obj.sqliteConfig.useBetterSQLite3) {
+            obj.file = new sqlite3(path.join(parent.datapath, databaseName + '.sqlite'));  // , { verbose: console.log }
+            obj.file.exec(queryCreateTables);
+                // Completed DB creation of SQLite3
+                sqliteSetOptions(func);
                 //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
                 setupFunctions(func);
+        } else {
+            obj.file = new sqlite3.Database(path.join(parent.datapath, databaseName + '.sqlite'), sqlite3.OPEN_READWRITE, function (err) {
+                if (err && (err.code == 'SQLITE_CANTOPEN')) {
+                    // Database needs to be created
+                    obj.file = new sqlite3.Database(path.join(parent.datapath, databaseName + '.sqlite'), function (err) {
+                        if (err) { console.log("SQLite Error: " + err); process.exit(1); }
+                        obj.file.exec(queryCreateTables, function (err) {
+                                // Completed DB creation of SQLite3
+                                sqliteSetOptions(func);
+                                //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
+                                setupFunctions(func);
+                            }
+                        );
+                    });
+                    return;
+                } else if (err) { console.log("SQLite Error: " + err); process.exit(0); }
+
+                //for existing db's
+                sqliteSetOptions();
+                // Create any missing tables (e.g., pluginpermissions added in updates)
+                obj.file.exec(`
+                    CREATE TABLE IF NOT EXISTS pluginpermissions (id VARCHAR(255) PRIMARY KEY, doc JSON)
+                `, function (err) {
+                    if (err) { console.log("SQLite Error creating pluginpermissions table: " + err); }
+                    //setupFunctions could be put in the sqliteSetupOptions, but left after it for clarity
+                    setupFunctions(func);
+                });
             });
-        });
+        };
     } else if (parent.args.acebase) {
         // AceBase database setup
         obj.databaseType = DB_ACEBASE;
@@ -1360,31 +1384,47 @@ module.exports.CreateDB = function (parent, func) {
     }
 
     function sqliteSetOptions(func) {
-        //get current auto_vacuum mode for comparison
-        obj.file.get('PRAGMA auto_vacuum;', function(err, current){
-            let pragma = 'PRAGMA journal_mode=' + obj.sqliteConfig.journalMode + ';' + 
-                'PRAGMA synchronous='+ obj.sqliteConfig.synchronous + ';' +
-                'PRAGMA journal_size_limit=' + obj.sqliteConfig.journalSize + ';' +
-                'PRAGMA auto_vacuum=' + obj.sqliteConfig.autoVacuum + ';' +
-                'PRAGMA incremental_vacuum=' + obj.sqliteConfig.incrementalVacuum + ';' +
-                'PRAGMA optimize=0x10002;';
-            //check new autovacuum mode, if changing from or to 'none', a VACUUM needs to be done to activate it. See https://www.sqlite.org/pragma.html#pragma_auto_vacuum
+        if (obj.sqliteConfig.useBetterSQLite3) {
+            let current_auto_vacuum = obj.file.pragma('auto_vacuum', { simple: true });
+            obj.file.pragma('journal_mode=' + obj.sqliteConfig.journalMode);
+            obj.file.pragma('synchronous='+ obj.sqliteConfig.synchronous);
+            obj.file.pragma('journal_size_limit=' + obj.sqliteConfig.journalSize);
+            obj.file.pragma('auto_vacuum=' + obj.sqliteConfig.autoVacuum);
+            obj.file.pragma('incremental_vacuum=' + obj.sqliteConfig.incrementalVacuum);
+            obj.file.pragma('optimize=0x10002');
             if ( obj.sqliteConfig.startupVacuum
-                || (current.auto_vacuum == 0 && obj.sqliteConfig.autoVacuum !='none')
-                || (current.auto_vacuum != 0 && obj.sqliteConfig.autoVacuum =='none'))
+                || (current_auto_vacuum == 0 && obj.sqliteConfig.autoVacuum !='none')
+                || (current_auto_vacuum != 0 && obj.sqliteConfig.autoVacuum =='none'))
                 {
-                    pragma += 'VACUUM;';
+                    obj.file.pragma('VACUUM');
                 };
-            parent.debug ('db', 'Config statement: ' + pragma);
-            
-            obj.file.exec( pragma,
-                function (err) {
-                if (err) { parent.debug('db', 'Config pragma error: ' + (err.message)) };
-                sqliteGetPragmas(['journal_mode', 'journal_size_limit', 'freelist_count', 'auto_vacuum', 'page_size', 'wal_autocheckpoint', 'synchronous'], function (pragma, pragmaValue) {
-                    parent.debug('db', 'PRAGMA: ' + pragma + '=' + pragmaValue);
+        } else {
+            //get current auto_vacuum mode for comparison
+            obj.file.get('PRAGMA auto_vacuum;', function(err, current){
+                let pragma = 'PRAGMA journal_mode=' + obj.sqliteConfig.journalMode + ';' + 
+                    'PRAGMA synchronous='+ obj.sqliteConfig.synchronous + ';' +
+                    'PRAGMA journal_size_limit=' + obj.sqliteConfig.journalSize + ';' +
+                    'PRAGMA auto_vacuum=' + obj.sqliteConfig.autoVacuum + ';' +
+                    'PRAGMA incremental_vacuum=' + obj.sqliteConfig.incrementalVacuum + ';' +
+                    'PRAGMA optimize=0x10002;';
+                //check new autovacuum mode, if changing from or to 'none', a VACUUM needs to be done to activate it. See https://www.sqlite.org/pragma.html#pragma_auto_vacuum
+                if ( obj.sqliteConfig.startupVacuum
+                    || (current.auto_vacuum == 0 && obj.sqliteConfig.autoVacuum !='none')
+                    || (current.auto_vacuum != 0 && obj.sqliteConfig.autoVacuum =='none'))
+                    {
+                        pragma += 'VACUUM;';
+                    };
+                parent.debug ('db', 'Config statement: ' + pragma);
+                
+                obj.file.exec( pragma,
+                    function (err) {
+                    if (err) { parent.debug('db', 'Config pragma error: ' + (err.message)) };
+                    sqliteGetPragmas(['journal_mode', 'journal_size_limit', 'freelist_count', 'auto_vacuum', 'page_size', 'wal_autocheckpoint', 'synchronous'], function (pragma, pragmaValue) {
+                        parent.debug('db', 'PRAGMA: ' + pragma + '=' + pragmaValue);
+                    });
                 });
             });
-        });
+        };
         //setupFunctions(func);
     }
 
@@ -1438,23 +1478,57 @@ module.exports.CreateDB = function (parent, func) {
         }
     }
 
+    // Better-sqlite3: differentiate between data returning queries
+    function BetterSql3Query (query, args = {}) {
+        let docs = [], result = {};
+        try{
+            const stmt = obj.file.prepare(query);
+            if ((query.trimStart().slice(0,6)).toUpperCase()== 'SELECT' || (query.toUpperCase()).includes(' RETURNING ')) {
+                // SELECT, INSERT...RETURNING: data returning query
+                docs = stmt.all(args);
+            } else {
+                // INSERT, DELETE, UPDATE: non data returning query
+                docs[0] = stmt.run(args);
+            }
+        } catch (e) {
+            return {docs: docs, err: e};
+        }
+        return {docs: docs, err: null};
+    }
+
     // Query the database
-    function sqlDbQuery(query, args, func, debug) {
+    async function sqlDbQuery(query, args, func) {
         if (obj.databaseType == DB_SQLITE) { // SQLite
-            if (args == null) { args = []; }
-            obj.file.all(query, args, function (err, docs) {
-                if (err != null) { console.log(query, args, err, docs); }
-                if (docs != null) {
-                    for (var i in docs) {
-                        if (typeof docs[i].doc == 'string') {
-                            try { docs[i] = JSON.parse(docs[i].doc); } catch (ex) {
-                                console.log(query, args, docs[i]);
+            if (obj.sqliteConfig.useBetterSQLite3) {
+                if (args == null) { args = {}; }
+                const result = await BetterSql3Query(query, args);
+                if (result.err != null) { console.log(query, args, err, docs); }
+                if (result.docs.length > 0) {
+                    for (var i in result.docs) {
+                        if (typeof result.docs[i].doc == 'string') {
+                            try { result.docs[i] = JSON.parse(result.docs[i].doc); } catch (ex) {
+                                console.error(query, JSON.stringify(args), result.docs[i]);
+                                }
+                            }
+                    }
+                }
+                if (func) { func (result.err, result.docs); }
+            } else {
+                if (args == null) { args = []; }
+                obj.file.all(query, args, function (err, docs) {
+                    if (err != null) { console.log(query, args, err, docs); }
+                    if (docs != null) {
+                        for (var i in docs) {
+                            if (typeof docs[i].doc == 'string') {
+                                try { docs[i] = JSON.parse(docs[i].doc); } catch (ex) {
+                                    console.log(query, args, docs[i]);
+                                }
                             }
                         }
                     }
-                }
-                if (func) { func(err, docs); }
-            });
+                    if (func) { func(err, docs); }
+                })
+            };
         } else if (obj.databaseType == DB_MARIADB) { // MariaDB
             Datastore.getConnection()
                 .then(function (conn) {
@@ -1572,7 +1646,323 @@ module.exports.CreateDB = function (parent, func) {
     }
 
     function setupFunctions(func) {
-        if (obj.databaseType == DB_SQLITE) {
+        if (obj.databaseType == DB_SQLITE && obj.sqliteConfig.useBetterSQLite3) {     // better-sqlite3 functions.
+        // Uses named parameters
+        // parameters passed as an object
+        // handles Date() differently than node-sqlite3
+            obj.Set = function (value, func) {
+                obj.dbCounters.fileSet++;
+                var extra = null, extraex = null;
+                value = common.escapeLinksFieldNameEx(value);
+                if (value.meshid) { extra = value.meshid; } else if (value.email) { extra = 'email/' + value.email; } else if (value.nodeid) { extra = value.nodeid; }
+                if ((value.type == 'node') && (value.intelamt != null) && (value.intelamt.uuid != null)) { extraex = 'uuid/' + value.intelamt.uuid; }
+                if (value._id == null) { value._id = require('crypto').randomBytes(16).toString('hex'); }
+                sqlDbQuery('INSERT INTO main VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET type = $2, domain = $3, extra = $4, extraex = $5, doc = $6;', {1: value._id, 2: (value.type ? value.type : null), 3: ((value.domain != null) ? value.domain : null), 4: extra, 5: extraex, 6: JSON.stringify(performTypedRecordEncrypt(value))}, func);
+            }
+            obj.SetRaw = function (value, func) {
+                obj.dbCounters.fileSet++;
+                var extra = null, extraex = null;
+                if (value.meshid) { extra = value.meshid; } else if (value.email) { extra = 'email/' + value.email; } else if (value.nodeid) { extra = value.nodeid; }
+                if ((value.type == 'node') && (value.intelamt != null) && (value.intelamt.uuid != null)) { extraex = 'uuid/' + value.intelamt.uuid; }
+                if (value._id == null) { value._id = require('crypto').randomBytes(16).toString('hex'); }
+                sqlDbQuery('INSERT INTO main VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET type = $2, domain = $3, extra = $4, extraex = $5, doc = $6;', {1: value._id, 2: (value.type ? value.type : null), 3: ((value.domain != null) ? value.domain : null), 4: extra, 5: extraex, 6: JSON.stringify(performTypedRecordEncrypt(value))}, func);
+            }
+            obj.Get = function (_id, func) {
+                sqlDbQuery('SELECT doc FROM main WHERE id = $1', {1: _id}, function (err, docs) {
+                    if ((docs != null) && (docs.length > 0)) { for (var i in docs) { if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    func(err, performTypedRecordDecrypt(docs));
+                });
+            }
+            obj.GetAll = function (func) {
+                sqlDbQuery('SELECT domain, doc FROM main', {}, function (err, docs) {
+                    if ((docs != null) && (docs.length > 0)) { for (var i in docs) { if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    func(err, performTypedRecordDecrypt(docs));
+                });
+            }
+            obj.GetHash = function (id, func) {
+                sqlDbQuery('SELECT doc FROM main WHERE id = $1', {1:id}, function (err, docs) {
+                    if ((docs != null) && (docs.length > 0)) { for (var i in docs) { if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    func(err, performTypedRecordDecrypt(docs));
+                });
+            }
+            obj.GetAllTypeNoTypeField = function (type, domain, func) {
+                sqlDbQuery('SELECT doc FROM main WHERE type = $1 AND domain = $2', {1: type, 2: domain}, function (err, docs) {
+                    if ((docs != null) && (docs.length > 0)) { for (var i in docs) { delete docs[i].type; if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    func(err, performTypedRecordDecrypt(docs));
+                });
+            };
+            obj.GetAllTypeNoTypeFieldMeshFiltered = function (meshes, extrasids, domain, type, id, skip, limit, func) {
+                if (limit == 0) { limit = -1; } // In SQLite, no limit is -1
+                if (id && (id != '')) {
+                    sqlDbQuery('SELECT doc FROM main WHERE (id = $1) AND (type = $2) AND (domain = $3) AND (extra IN (' + dbMergeSqlArray(meshes) + ')) LIMIT $4 OFFSET $5', {1: id, 2: type, 3: domain, 4: limit, 5: skip}, function (err, docs) {
+                        if (docs != null) { for (var i in docs) { delete docs[i].type; if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                        func(err, performTypedRecordDecrypt(docs));
+                    });
+                } else {
+                    if (extrasids == null) {
+                        sqlDbQuery('SELECT doc FROM main WHERE (type = $1) AND (domain = $2) AND (extra IN (' + dbMergeSqlArray(meshes) + ')) LIMIT $3 OFFSET $4', {1: type, 2: domain, 3: limit, 4: skip}, function (err, docs) {
+                            if (docs != null) { for (var i in docs) { delete docs[i].type; if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                            func(err, performTypedRecordDecrypt(docs));
+                        });
+                    } else {
+                        sqlDbQuery('SELECT doc FROM main WHERE (type = $1) AND (domain = $2) AND ((extra IN (' + dbMergeSqlArray(meshes) + ')) OR (id IN (' + dbMergeSqlArray(extrasids) + '))) LIMIT $3 OFFSET $4', {1: type, 2: domain, 3: limit, 4: skip}, function (err, docs) {
+                            if (docs != null) { for (var i in docs) { delete docs[i].type; if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                            func(err, performTypedRecordDecrypt(docs));
+                        });
+                    }
+                }
+            };
+            obj.CountAllTypeNoTypeFieldMeshFiltered = function (meshes, extrasids, domain, type, id, func) {
+                if (id && (id != '')) {
+                    sqlDbQuery('SELECT COUNT(doc) FROM main WHERE (id = $1) AND (type = $2) AND (domain = $3) AND (extra IN (' + dbMergeSqlArray(meshes) + '))', {1: id, 2: type, 3: domain}, function (err, docs) {
+                        func(err, (err == null) ? docs[0]['COUNT(doc)'] : null);
+                    });
+                } else {
+                    if (extrasids == null) {
+                        sqlDbQuery('SELECT COUNT(doc) FROM main WHERE (type = $1) AND (domain = $2) AND (extra IN (' + dbMergeSqlArray(meshes) + '))', {1: type, 2: domain}, function (err, docs) {
+                            func(err, (err == null) ? docs[0]['COUNT(doc)'] : null);
+                        });
+                    } else {
+                        sqlDbQuery('SELECT COUNT(doc) FROM main WHERE (type = $1) AND (domain = $2) AND ((extra IN (' + dbMergeSqlArray(meshes) + ')) OR (id IN (' + dbMergeSqlArray(extrasids) + ')))', {1: type, 2: domain}, function (err, docs) {
+                            func(err, (err == null) ? docs[0]['COUNT(doc)'] : null);
+                        });
+                    }
+                }
+            };
+            obj.GetAllTypeNodeFiltered = function (nodes, domain, type, id, func) {
+                if (id && (id != '')) {
+                    sqlDbQuery('SELECT doc FROM main WHERE (id = $1) AND (type = $2) AND (domain = $3) AND (extra IN (' + dbMergeSqlArray(nodes) + '))', {1: id, 2: type, 3: domain}, function (err, docs) {
+                        if (docs != null) { for (var i in docs) { delete docs[i].type; if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                        func(err, performTypedRecordDecrypt(docs));
+                    });
+                } else {
+                    sqlDbQuery('SELECT doc FROM main WHERE (type = $1) AND (domain = $2) AND (extra IN (' + dbMergeSqlArray(nodes) + '))', {1: type, 2: domain}, function (err, docs) {
+                        if (docs != null) { for (var i in docs) { delete docs[i].type; if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                        func(err, performTypedRecordDecrypt(docs));
+                    });
+                }
+            };
+            obj.GetAllType = function (type, func) {
+                sqlDbQuery('SELECT doc FROM main WHERE type = $1', {1: type}, function (err, docs) {
+                    if (docs != null) { for (var i in docs) { if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    func(err, performTypedRecordDecrypt(docs));
+                });
+            }
+            obj.GetAllIdsOfType = function (ids, domain, type, func) {
+                sqlDbQuery('SELECT doc FROM main WHERE (id IN (' + dbMergeSqlArray(ids) + ')) AND domain = $1 AND type = $2', {1: domain, 2: type}, function (err, docs) {
+                    if (docs != null) { for (var i in docs) { delete docs[i].type; if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    func(err, performTypedRecordDecrypt(docs));
+                });
+            }
+            obj.GetUserWithEmail = function (domain, email, func) {
+                sqlDbQuery('SELECT doc FROM main WHERE domain = $1 AND extra = $2', {1: domain, 2: 'email/' + email}, function (err, docs) {
+                    if (docs != null) { for (var i in docs) { delete docs[i].type; if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    func(err, performTypedRecordDecrypt(docs));
+                });
+            }
+            obj.GetUserWithVerifiedEmail = function (domain, email, func) {
+                sqlDbQuery('SELECT doc FROM main WHERE domain = $1 AND extra = $2', {1: domain, 2: 'email/' + email}, function (err, docs) {
+                    if (docs != null) { for (var i in docs) { delete docs[i].type; if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    func(err, performTypedRecordDecrypt(docs));
+                });
+            }
+            obj.Remove = function (id, func) { sqlDbQuery('DELETE FROM main WHERE id = $1', {1: id}, func); };
+            obj.RemoveAll = function (func) { sqlDbQuery('DELETE FROM main', {}, func); };
+            obj.RemoveAllOfType = function (type, func) { sqlDbQuery('DELETE FROM main WHERE type = $1', {1: type}, func); };
+            obj.InsertMany = function (data, func) { var pendingOps = 0; for (var i in data) { pendingOps++; obj.SetRaw(data[i], function () { if (--pendingOps == 0) { func(); } }); } }; // Insert records directly, no link escaping
+            obj.RemoveMeshDocuments = function (id, func) { sqlDbQuery('DELETE FROM main WHERE extra = $1', {1: id}, function () { sqlDbQuery('DELETE FROM main WHERE id = $1', {1: 'nt' + id}, func); }); };
+            obj.MakeSiteAdmin = function (username, domain) { obj.Get('user/' + domain + '/' + username, function (err, docs) { if ((err == null) && (docs.length == 1)) { docs[0].siteadmin = 0xFFFFFFFF; obj.Set(docs[0]); } }); };
+            obj.DeleteDomain = function (domain, func) { sqlDbQuery('DELETE FROM main WHERE domain = $1', {1: domain}, func); };
+            obj.SetUser = function (user) { if (user == null) return; if (user.subscriptions != null) { var u = Clone(user); if (u.subscriptions) { delete u.subscriptions; } obj.Set(u); } else { obj.Set(user); } };
+            obj.dispose = function () { for (var x in obj) { if (obj[x].close) { obj[x].close(); } delete obj[x]; } };
+            obj.getLocalAmtNodes = function (func) {
+                sqlDbQuery('SELECT doc FROM main WHERE (type = \'node\') AND (extraex IS NULL)', {}, function (err, docs) {
+                    if (docs != null) { for (var i in docs) { if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    var r = []; if (err == null) { for (var i in docs) { if (docs[i].host != null && docs[i].intelamt != null) { r.push(docs[i]); } } } func(err, r);
+                });
+            };
+            obj.getAmtUuidMeshNode = function (domainid, mtype, uuid, func) {
+                sqlDbQuery('SELECT doc FROM main WHERE domain = $1 AND extraex = $2', {1: domainid, 2: 'uuid/' + uuid}, function (err, docs) {
+                    if (docs != null) { for (var i in docs) { if (docs[i].links != null) { docs[i] = common.unEscapeLinksFieldName(docs[i]); } } }
+                    func(err, docs);
+                });
+            };
+            obj.isMaxType = function (max, type, domainid, func) { if (max == null) { func(false); } else { sqlDbExec('SELECT COUNT(id) FROM main WHERE domain = $1 AND type = $2', {1: domainid, 2: type}, function (err, response) { func((response['COUNT(id)'] == null) || (response['COUNT(id)'] > max), response['COUNT(id)']) }); } }
+
+            // Database actions on the events collection
+            obj.GetAllEvents = function (func) {
+                sqlDbQuery('SELECT doc FROM events', {}, func);
+            };
+            obj.StoreEvent = function (event, func) {
+                obj.dbCounters.eventsSet++;
+                sqlDbQuery('INSERT INTO events VALUES (NULL, $1, $2, $3, $4, $5, $6) RETURNING id', {1: Date.parse(event.time), 2: ((typeof event.domain == 'string') ? event.domain : null), 3: event.action, 4: event.nodeid ? event.nodeid : null, 5: event.userid ? event.userid : null, 6: JSON.stringify(event)}, function (err, docs) {
+                    if(func){ func(); }
+                    if ((err == null) && (docs[0].id)) {
+                        for (var i in event.ids) {
+                            if (event.ids[i] != '*') {
+                                obj.pendingTransfer++;
+                                sqlDbQuery('INSERT INTO eventids VALUES ($1, $2)', {1: docs[0].id, 2: event.ids[i]}, function(){ if(func){ func(); } });
+                            }
+                        }
+                    }
+                });
+            };
+            obj.GetEvents = function (ids, domain, filter, func) {
+                var query = "SELECT doc FROM events ";
+                var dataobject = {1: domain, 2: filter};
+                if (ids.indexOf('*') >= 0) {
+                    query = query + "WHERE (domain = $1";
+                    if (filter != null) {
+                        query = query + " AND action = $2";
+                    }
+                    query = query + ") ORDER BY time DESC";
+                } else {
+                    query = query + 'JOIN eventids ON id = fkid WHERE (domain = $1 AND (target IN (' + dbMergeSqlArray(ids) + '))';
+                    if (filter != null) {
+                        query = query + " AND action = $2";
+                    }
+                    query = query + ") GROUP BY id ORDER BY time DESC ";
+                }
+                sqlDbQuery(query, dataobject, func);
+            };
+            obj.GetEventsWithLimit = function (ids, domain, limit, filter, func) {
+                var query = "SELECT doc FROM events ";
+                var dataobject = {1: domain, 2: limit, 3: filter};
+                if (ids.indexOf('*') >= 0) {
+                    query = query + "WHERE (domain = $1";
+                    if (filter != null) {
+                        query = query + " AND action = $3) ORDER BY time DESC LIMIT $2";
+                    } else {
+                        query = query + ") ORDER BY time DESC LIMIT $2";
+                    }
+                } else {
+                    query = query + "JOIN eventids ON id = fkid WHERE (domain = $1 AND (target IN (" + dbMergeSqlArray(ids) + "))";
+                    if (filter != null) {
+                        query = query + " AND action = $3) GROUP BY id ORDER BY time DESC LIMIT $2";
+                    } else {
+                        query = query + ") GROUP BY id ORDER BY time DESC LIMIT $2";
+                    }
+                }
+                sqlDbQuery(query, dataobject, func);                
+            };
+            obj.GetUserEvents = function (ids, domain, userid, filter, func) {
+                var query = "SELECT doc FROM events ";
+                var dataobject = {1: domain, 2: userid, 3: filter};
+                if (ids.indexOf('*') >= 0) {
+                    query = query + "WHERE (domain = $1 AND userid = $2";
+                    if (filter != null) {
+                        query = query + " AND action = $3";
+                    }
+                    query = query + ") ORDER BY time DESC";
+                } else {
+                    query = query + 'JOIN eventids ON id = fkid WHERE (domain = $1 AND userid = $2 AND (target IN (' + dbMergeSqlArray(ids) + '))';
+                    if (filter != null) {
+                        query = query + " AND action = $3";
+                    }
+                    query = query + ") GROUP BY id ORDER BY time DESC";
+                }
+                sqlDbQuery(query, dataobject, func);
+            };
+            obj.GetUserEventsWithLimit = function (ids, domain, userid, limit, filter, func) {
+                var query = "SELECT doc FROM events ";
+                var dataobject = {1: domain, 2: userid, 3: limit, 4: filter};
+                if (ids.indexOf('*') >= 0) {
+                    query = query + "WHERE (domain = $1 AND userid = $2";
+                    if (filter != null) {
+                        query = query + " AND action = $4) ORDER BY time DESC LIMIT $3";
+                    } else {
+                        query = query + ") ORDER BY time DESC LIMIT $3";
+                    }
+                } else {
+                    query = query + "JOIN eventids ON id = fkid WHERE (domain = $1 AND userid = $2 AND (target IN (" + dbMergeSqlArray(ids) + "))";
+                    if (filter != null) {
+                        query = query + " AND action = $4) GROUP BY id ORDER BY time DESC LIMIT $3";
+                    } else {
+                        query = query + ") GROUP BY id ORDER BY time DESC LIMIT $3";
+                    }
+                }
+                sqlDbQuery(query, dataobject, func);
+            };
+            obj.GetEventsTimeRange = function (ids, domain, msgids, start, end, func) {
+                if (ids.indexOf('*') >= 0) {
+                    sqlDbQuery('SELECT doc FROM events WHERE ((domain = $1) AND (time BETWEEN $2 AND $3)) ORDER BY time', {1: domain, 2: Date.parse(start), 3: Date.parse(end)}, func);
+                } else {
+                    sqlDbQuery('SELECT doc FROM events JOIN eventids ON id = fkid WHERE ((domain = $1) AND (target IN (' + dbMergeSqlArray(ids) + ')) AND (time BETWEEN $2 AND $3)) GROUP BY id ORDER BY time', {1: domain, 2: Date.parse(start), 3: Date.parse(end)}, func);
+                }
+            };
+            //obj.GetUserLoginEvents = function (domain, userid, func) { } // TODO
+            obj.GetNodeEventsWithLimit = function (nodeid, domain, limit, filter, func) {
+                var query = "SELECT doc FROM events WHERE (nodeid = $1 AND domain = $2";
+                var dataobject = {1: nodeid, 2: domain, 3: filter, 4: limit };
+                if (filter != null) {
+                    query = query + " AND action = $3) ORDER BY time DESC LIMIT $4";
+                } else {
+                    query = query + ") ORDER BY time DESC LIMIT $4";
+                }
+                sqlDbQuery(query, dataobject, func);
+            };
+            obj.GetNodeEventsSelfWithLimit = function (nodeid, domain, userid, limit, filter, func) {
+                var query = "SELECT doc FROM events WHERE (nodeid = $1) AND (domain = $2) AND ((userid = $3) OR (userid IS NULL)) ";
+                var dataobject = {1: nodeid, 2: domain, 3: userid, 4: limit, 5: filter};
+                if (filter != null) {
+                    query = query + "AND (action = $5) ORDER BY time DESC LIMIT $4";
+                } else {
+                    query = query + "ORDER BY time DESC LIMIT $4";
+                }
+                sqlDbQuery(query, dataobject, func);
+            };
+            obj.RemoveAllEvents = function (domain) { sqlDbQuery('DELETE FROM events', {}, function (err, docs) { }); };
+            obj.RemoveAllNodeEvents = function (domain, nodeid) { if ((domain == null) || (nodeid == null)) return; sqlDbQuery('DELETE FROM events WHERE domain = $1 AND nodeid = $2', {1: domain, 2: nodeid}, function (err, docs) { }); };
+            obj.RemoveAllUserEvents = function (domain, userid) { if ((domain == null) || (userid == null)) return; sqlDbQuery('DELETE FROM events WHERE domain = $1 AND userid = $2', {1: domain, 2: userid}, function (err, docs) { }); };
+            obj.GetFailedLoginCount = function (userid, domainid, lastlogin, func) { sqlDbQuery('SELECT COUNT(*) FROM events WHERE action = \'authfail\' AND domain = $1 AND userid = $2 AND time > $3', {1: domainid, 2: userid, 3: Date.parse(lastlogin)}, function (err, response) { func(err == null ? response[0]['COUNT(*)'] : 0); }); }
+
+            // Database actions on the power collection
+            obj.getAllPower = function (func) { sqlDbQuery('SELECT doc FROM power', {}, func); };
+            obj.storePowerEvent = function (event, multiServer, func) { obj.dbCounters.powerSet++; if (multiServer != null) { event.server = multiServer.serverid; } sqlDbQuery('INSERT INTO power VALUES (NULL, $1, $2, $3)', {1: Date.parse(event.time), 2: event.nodeid ? event.nodeid : null, 3: JSON.stringify(event)}, func); };
+            obj.getPowerTimeline = function (nodeid, func) { sqlDbQuery('SELECT doc FROM power WHERE ((nodeid = $1) OR (nodeid = \'*\')) ORDER BY time ASC', {1: nodeid}, func); };
+            obj.removeAllPowerEvents = function () { sqlDbQuery('DELETE FROM power', {}, function (err, docs) { }); };
+            obj.removeAllPowerEventsForNode = function (nodeid) { if (nodeid == null) return; sqlDbQuery('DELETE FROM power WHERE nodeid = $1', {1: nodeid}, function (err, docs) { }); };
+
+            // Database actions on the SMBIOS collection
+            obj.GetAllSMBIOS = function (func) { sqlDbQuery('SELECT doc FROM smbios', {}, func); };
+            obj.SetSMBIOS = function (smbios, func) { var expire = new Date(smbios.time); expire.setMonth(expire.getMonth() + 6); sqlDbQuery('INSERT INTO smbios VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET time = $2, expire = $3, doc = $4', {1: smbios._id, 2: Date.parse(smbios.time), 3: expire, 4: JSON.stringify(smbios)}, func); };
+            obj.RemoveSMBIOS = function (id) { sqlDbQuery('DELETE FROM smbios WHERE id = $1', {1: id}, function (err, docs) { }); };
+            obj.GetSMBIOS = function (id, func) { sqlDbQuery('SELECT doc FROM smbios WHERE id = $1', {1: id}, func); };
+
+            // Database actions on the Server Stats collection
+            obj.SetServerStats = function (data, func) { sqlDbQuery('INSERT INTO serverstats VALUES ($1, $2, $3) ON CONFLICT (time) DO UPDATE SET expire = $2, doc = $3', {1: Date.parse(data.time), 2: Date.parse(data.expire), 3: JSON.stringify(data)}, func); };
+            obj.GetServerStats = function (hours, func) { var t = new Date(); t.setTime(t.getTime() - (60 * 60 * 1000 * hours)); sqlDbQuery('SELECT doc FROM serverstats WHERE time > $1', {1: Date.parse(t)}, func); }; // TODO: Expire old entries
+
+            // Read a configuration file from the database
+            obj.getConfigFile = function (path, func) { obj.Get('cfile/' + path, func); }
+
+            // Write a configuration file to the database
+            obj.setConfigFile = function (path, data, func) { obj.Set({ _id: 'cfile/' + path, type: 'cfile', data: data.toString('base64') }, func); }
+
+            // List all configuration files
+            obj.listConfigFiles = function (func) { sqlDbQuery('SELECT doc FROM main WHERE type = "cfile" ORDER BY id', func); }
+
+            // Get database information (TODO: Complete this)
+            obj.getDbStats = function (func) {
+                obj.stats = { c: 4 };
+                sqlDbQuery('SELECT COUNT(*) FROM main', {}, function (err, response) { obj.stats.meshcentral = (err == null ? response[0]['COUNT(*)'] : 0); if (--obj.stats.c == 0) { delete obj.stats.c; func(obj.stats); } });
+                sqlDbQuery('SELECT COUNT(*) FROM serverstats', {}, function (err, response) { obj.stats.serverstats = (err == null ? response[0]['COUNT(*)'] : 0); if (--obj.stats.c == 0) { delete obj.stats.c; func(obj.stats); } });
+                sqlDbQuery('SELECT COUNT(*) FROM power', {}, function (err, response) { obj.stats.power = (err == null ? response[0]['COUNT(*)'] : 0); if (--obj.stats.c == 0) { delete obj.stats.c; func(obj.stats); } });
+                sqlDbQuery('SELECT COUNT(*) FROM smbios', {}, function (err, response) { obj.stats.smbios = (err == null ? response[0]['COUNT(*)'] : 0); if (--obj.stats.c == 0) { delete obj.stats.c; func(obj.stats); } });
+            }
+
+            // Plugin operations
+            if (obj.pluginsActive) {
+                obj.addPlugin = function (plugin, func) { sqlDbQuery('INSERT INTO plugin VALUES (NULL, $1)', {1: JSON.stringify(plugin)}, func); }; // Add a plugin
+                obj.getPlugins = function (func) { sqlDbQuery('SELECT JSON_INSERT(doc, \'$._id\', id) as doc FROM plugin', {}, func); }; // Get all plugins
+                obj.getPlugin = function (id, func) { sqlDbQuery('SELECT JSON_INSERT(doc, \'$._id\', id) as doc FROM plugin WHERE id = $1', {1: id}, func); }; // Get plugin
+                obj.deletePlugin = function (id, func) { sqlDbQuery('DELETE FROM plugin WHERE id = $1', {1: id}, func); }; // Delete plugin
+                obj.setPluginStatus = function (id, status, func) { sqlDbQuery('UPDATE plugin SET doc=JSON_SET(doc,\'$.status\',$1) WHERE id=$2', {1: status, 2: id}, func); };
+                obj.updatePlugin = function (id, args, func) { delete args._id; sqlDbQuery('UPDATE plugin SET doc=json_patch(doc,$1) WHERE id=$2', {1: JSON.stringify(args), 2: id}, func); };
+                obj.getPluginPermissions = function (pluginName, func) { sqlDbQuery('SELECT doc FROM pluginpermissions WHERE id = $1', {1: 'pluginpermission//' + pluginName}, function(err, docs) { if (docs && docs.length > 0) { func(null, [docs[0].doc]); } else { func(null, []); } }); };
+                obj.setPluginPermissions = function (pluginName, data, func) { delete data._id; sqlDbQuery('INSERT INTO pluginpermissions VALUES ($1, $2) ON DUPLICATE KEY UPDATE doc = $2', {1: 'pluginpermission//' + pluginName, 2: JSON.stringify(data)}, func); };
+            }
+        } else if (obj.databaseType == DB_SQLITE) {     //original node-sqlite3 driver functions. Parameters must be in order of placement in query, can't be named 
             // Database actions on the main collection. SQLite3: https://www.linode.com/docs/guides/getting-started-with-nodejs-sqlite/
             obj.Set = function (value, func) {
                 obj.dbCounters.fileSet++;
@@ -3669,11 +4059,22 @@ module.exports.CreateDB = function (parent, func) {
                 obj.newDBDumpFile = path.join(backupPath, databaseName + '-sqlitedump-' + fileSuffix + '.db3');
                 // do a VACUUM INTO in favor of the backup API to compress the export, see https://www.sqlite.org/backup.html
                 parent.debug('backup','SQLitedump: VACUUM INTO ' + obj.newDBDumpFile);
-                obj.file.exec('VACUUM INTO \'' + obj.newDBDumpFile + '\'', function (err) {
-                    if (err) { console.error('SQLite backup error: ' + err); obj.backupStatus |=BACKUPFAIL_DBDUMP;};
-                    //always finish/clean up
-                    obj.createBackupfile(func);
-                });
+                if (obj.sqliteConfig.useBetterSQLite3) {
+                    obj.file.backup(obj.newDBDumpFile)
+                    .then(() => {
+                        obj.createBackupfile(func);
+                    })
+                    .catch((err) => {
+                        console.error('SQLite backup error: ' + err.message); obj.backupStatus |=BACKUPFAIL_DBDUMP;
+                        obj.createBackupfile(func);
+                    });
+                } else {
+                    obj.file.exec('VACUUM INTO \'' + obj.newDBDumpFile + '\'', function (err) {
+                        if (err) { console.error('SQLite backup error: ' + err); obj.backupStatus |=BACKUPFAIL_DBDUMP;};
+                        //always finish/clean up
+                        obj.createBackupfile(func);
+                    });
+                } 
             } else if (obj.databaseType == DB_POSTGRESQL) {
                 // Perform a PostgresDump backup
                 const newBackupFile = 'pgdump-' + fileSuffix + '.sql';
