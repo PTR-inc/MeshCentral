@@ -3893,7 +3893,7 @@
                         case 'sysinfohash': {
                             // If the sysinfo document has changed and we are looking at it, request an update.
                             if ((currentNode != null) && (message.event.nodeid == powerTimelineReq)) {
-                                meshserver.send({ action: 'getsysinfo', nodeid: message.event.nodeid });
+                                meshserver.send({ action: 'getsysinfo', nodeid: message.event.nodeid, responseid: 'meshuser' });
                             }
                             break;
                         }
@@ -8185,7 +8185,7 @@
                     powerTimelineReq = currentNode._id;
                     meshserver.send({ action: 'powertimeline', nodeid: currentNode._id });
                     meshserver.send({ action: 'lastconnect', nodeid: currentNode._id });
-                    meshserver.send({ action: 'getsysinfo', nodeid: currentNode._id });
+                    meshserver.send({ action: 'getsysinfo', nodeid: currentNode._id, responseid: 'meshuser' });
                     meshserver.send({ action: 'getnetworkinfo', nodeid: currentNode._id });
                     meshserver.send({ action: 'getNotes', id: currentNode._id });
                     QH('p17info2', '');
