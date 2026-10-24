@@ -2967,6 +2967,16 @@ function CreateMeshCentralServer(config, args) {
         return r;
     }
 
+    // The addModule() line that puts a module file into a core, with what the "modules" server console command shows about the file. Shared by the meshcore, meshcmd and plugin module folders
+    obj.buildAddModuleLine = function (moduleName, modulePath) {
+        const source = obj.fs.readFileSync(modulePath).toString('binary');
+        var date = null;
+        try { date = obj.fs.statSync(modulePath).mtime.toISOString(); } catch (ex) { }
+        const line = 'try { if (addModule("' + moduleName + '", "' + obj.escapeCodeString(source) + '"' + ((date != null) ? (', "' + date + '"') : '') + ') !== false) { addedModules.push("' + moduleName + '"); } } catch (ex) { }\r\n';
+        const match = /@module-version=(\d+)/i.exec(source.replace(/^(\xEF\xBB\xBF)?[ \t\r\n]*/, '').split(/[\r\n]/, 1)[0]); // Only a version on the first line counts, the same rule as the agent
+        return { line: line, version: (match != null) ? parseInt(match[1]) : 0, date: date };
+    }
+
     // Update the default mesh core
     obj.updateMeshCore = function (func, dumpToFile) {
         // Figure out where meshcore.js is
@@ -2980,6 +2990,7 @@ function CreateMeshCentralServer(config, args) {
 
         // Read meshcore.js and all .js files in the modules folder.
         var meshCore = null, modulesDir = null;
+        obj.meshCoreModules = {};
         const modulesAdd = {
             'windows-amt': ['var addedModules = [];\r\n'],
             'linux-amt': ['var addedModules = [];\r\n'],
@@ -3041,9 +3052,9 @@ function CreateMeshCentralServer(config, args) {
                         var moduleName = modulesDir[i].substring(0, modulesDir[i].length - 3);
                         if (moduleName.endsWith('.min')) { moduleName = moduleName.substring(0, moduleName.length - 4); } // Remove the ".min" for ".min.js" files.
                         const modulePath = obj.path.join(moduleDirPath, modulesDir[i]);
-                        var moduleDate = '';
-                        try { moduleDate = ', "' + obj.fs.statSync(modulePath).mtime.toISOString() + '"'; } catch (ex) { }
-                        const moduleData = ['try { addModule("', moduleName, '", "', obj.escapeCodeString(obj.fs.readFileSync(modulePath).toString('binary')), '"', moduleDate, '); addedModules.push("', moduleName, '"); } catch (ex) { }\r\n'];
+                        const mod = obj.buildAddModuleLine(moduleName, modulePath);
+                        obj.meshCoreModules[moduleName] = { version: mod.version, date: mod.date };
+                        const moduleData = [mod.line];
 
                         // Merge this module
                         // NOTE: "smbios" module makes some non-AI Linux segfault, only include for IA platforms.
@@ -3084,6 +3095,10 @@ function CreateMeshCentralServer(config, args) {
 
             // Add plugins to cores
             if (obj.pluginHandler) { obj.pluginHandler.addMeshCoreModules(modulesAdd); }
+
+            // A module file without a version line counts as version 0 on the agent, so a built-in copy with a version wins, and the date only decides between two copies without one
+            const unversioned = Object.keys(obj.meshCoreModules).filter(function (n) { return obj.meshCoreModules[n].version == 0; });
+            if (unversioned.length > 0) { obj.debug('main', 'Core module files without a version line: ' + unversioned.join(', ')); }
 
             // If we need to dump modules to file, create a meshcores folder
             if (dumpToFile) { try { obj.fs.mkdirSync('meshcores'); } catch (ex) { } }
@@ -3143,13 +3158,17 @@ function CreateMeshCentralServer(config, args) {
         if (modulesDir == null) { try { moduleDirPath = obj.path.join(__dirname, 'agents', 'modules_meshcmd'); modulesDir = obj.fs.readdirSync(moduleDirPath); } catch (ex) { } } // Use non-minified mofules.
 
         // Read all .js files in the meshcmd modules folder.
+        obj.meshCmdModules = {};
         if (modulesDir != null) {
             for (var i in modulesDir) {
                 if (modulesDir[i].toLowerCase().endsWith('.js')) {
                     // Merge this module
                     var moduleName = modulesDir[i].substring(0, modulesDir[i].length - 3);
                     if (moduleName.endsWith('.min')) { moduleName = moduleName.substring(0, moduleName.length - 4); } // Remove the ".min" for ".min.js" files.
-                    moduleAdditions.push('try { addModule("', moduleName, '", "', obj.escapeCodeString(obj.fs.readFileSync(obj.path.join(moduleDirPath, modulesDir[i])).toString('binary')), '"); addedModules.push("', moduleName, '"); } catch (ex) { }\r\n');
+                    const modulePath = obj.path.join(moduleDirPath, modulesDir[i]);
+                    const mod = obj.buildAddModuleLine(moduleName, modulePath);
+                    obj.meshCmdModules[moduleName] = { version: mod.version, date: mod.date };
+                    moduleAdditions.push(mod.line);
                 }
             }
         }

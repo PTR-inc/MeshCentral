@@ -1,3 +1,4 @@
+/*! @module-version=1 */
 
 var promise = require('promise');
 

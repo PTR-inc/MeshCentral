@@ -8097,7 +8097,22 @@
                 "SMS succesfuly sent.",
                 "SMS error",
                 "SMS error: {0}",
-                "Email domain \"{0}\" is not allowed. Only ({1}) are allowed" // 30
+                "Email domain \"{0}\" is not allowed. Only ({1}) are allowed", // 30
+                "Invalid message",
+                "Message succesfully sent.",
+                "Message error",
+                "Message error: {0}",
+                "Security Warning: Agent has loading module files enabled (-allowDiskModules){0}", // 35
+                "Security Warning: Agent has loading module files enabled (Debug build){0}",
+                "Security Warning: Agent has module files in its working directory, loading=disabled{0}",
+                "Security Warning: Agent has module files in its working directory, loading=enabled{0}",
+                "Security Warning: Agent loaded module '{0}'",
+                "Agent {0} has loading module files enabled (-allowDiskModules){1}", // 40
+                "Agent {0} has loading module files enabled (Debug build){1}",
+                "Agent {0} has module files in its working directory, loading=disabled{1}",
+                "Agent {0} has module files in its working directory, loading=enabled{1}",
+                "{0} more agents report. Type \"modules w\" in My Server > Console for the full list.", // 44
+                "Security Warning: New module files in the agent's working directory{0}" // 45
             ];
             if (typeof n.titleid == 'number') { try { n.title = translatedTitles[n.titleid]; } catch (ex) { } }
             if (typeof n.msgid == 'number') { try { n.text = translatedMessages[n.msgid]; if (Array.isArray(n.args)) { n.text = format(n.text, n.args[0], n.args[1], n.args[2], n.args[3], n.args[4], n.args[5]); } } catch (ex) { } }

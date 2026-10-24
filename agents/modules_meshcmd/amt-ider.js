@@ -1,3 +1,4 @@
+/*! @module-version=1 */
 /** 
 * @description IDER Handling Module
 * @author Ylian Saint-Hilaire

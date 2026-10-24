@@ -686,6 +686,18 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                 });
             }
 
+            // Warn about connected agents with disk modules enabled (the switch or a debug build) or with .js files in their working directory
+            // Shown to full administrators and to users with rights on the device
+            var dmAgents = getDiskModuleAgents();
+            if (user.siteadmin !== SITERIGHT_ADMIN) { dmAgents = dmAgents.filter(function (agent) { return (parent.GetNodeRights(user, agent.dbMeshKey, agent.dbNodeKey) != 0); }); }
+            for (var i = 0; (i < dmAgents.length) && (i < 10); ++i) {
+                const message = parent.getDiskModulesText(dmAgents[i].diskModules, 'login', parent.getAgentDisplayName(dmAgents[i]));
+                try { ws.send(JSON.stringify({ action: 'msg', type: 'notify', title: "Security Warning", titleid: 3, tag: 'ServerNotify', id: Math.random(), value: message.text, msgid: message.msgid, args: message.args, url: '?gotonode=' + dmAgents[i].dbNodeKey.split('/')[2] + '&viewmode=16' })); } catch (ex) { }
+            }
+            if (dmAgents.length > 10) {
+                try { ws.send(JSON.stringify({ action: 'msg', type: 'notify', title: "Security Warning", titleid: 3, tag: 'ServerNotify', id: Math.random(), value: (dmAgents.length - 10) + " more agents report. Type \"modules w\" in My Server > Console for the full list.", msgid: 44, args: [dmAgents.length - 10] })); } catch (ex) { }
+            }
+
             // If we are site administrator and Google Drive backup is setup, send out the status.
             if ((user.siteadmin === SITERIGHT_ADMIN) && (domain.id == '') && (typeof parent.parent.config.settings.autobackup == 'object') && (typeof parent.parent.config.settings.autobackup.googledrive == 'object')) {
                 db.Get('GoogleDriveBackup', function (err, docs) {
@@ -6056,6 +6068,7 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
         'leevents': [serverUserCommandLeEvents, ""],
         'maintenance': [serverUserCommandMaintenance, ""],
         'migrationagents': [serverUserCommandMigrationAgents, ""],
+        'modules': [serverUserCommandModules, "Lists the agent modules of this server or the agents that report disk module files. Usage: modules [w]"],
         'mps': [serverUserCommandMps, ""],
         'mpsstats': [serverUserCommandMpsStats, ""],
         'nodeconfig': [serverUserCommandNodeConfig, ""],
@@ -7831,6 +7844,24 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
             cmdData.result = "Let's Encrypt not in use.";
         } else {
             cmdData.result = parent.parent.letsencrypt.events.join('\r\n');
+        }
+    }
+
+    // The connected agents of this domain with a disk module report, for the login warning and the "modules w" console command
+    function getDiskModuleAgents() {
+        var agents = [];
+        for (var i in parent.diskModuleAgents) { const agent = parent.diskModuleAgents[i]; if ((agent != null) && (agent.diskModules != null) && (agent.domain != null) && (agent.domain.id == domain.id)) { agents.push(agent); } }
+        return agents;
+    }
+
+    function serverUserCommandModules(cmdData) {
+        var sub = (cmdData.cmdargs['_'].length > 0) ? ('' + cmdData.cmdargs['_'][0]).toLowerCase() : '';
+        if (sub == 'w') {
+            const lines = getDiskModuleAgents().map(function (agent) { return parent.getDiskModulesText(agent.diskModules, 'login', parent.getAgentDisplayName(agent)).text; }).sort();
+            cmdData.result = (lines.length == 0) ? "No connected agent reports" : (lines.length + " agent(s) report:\r\n  " + lines.join('\r\n  '));
+        } else {
+            const block = function (mods) { const names = (mods != null) ? Object.keys(mods).sort() : [], lines = []; for (var i = 0; i < names.length; ++i) { lines.push('  ' + JSON.stringify(names[i]) + ': ' + JSON.stringify(mods[names[i]])); } return (lines.length > 0) ? ('{\r\n' + lines.join(',\r\n') + '\r\n}') : '{}'; };
+            cmdData.result = 'meshcore, with the plugin modules:\r\n' + block(parent.parent.meshCoreModules) + '\r\nmeshcmd:\r\n' + block(parent.parent.meshCmdModules);
         }
     }
 

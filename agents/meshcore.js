@@ -853,6 +853,31 @@ var meshCoreObj = { action: 'coreinfo', value: (require('MeshAgent').coreHash ? 
 // Get the operating system description string
 try { require('os').name().then(function (v) { meshCoreObj.osdesc = v; meshCoreObjChanged(); }); } catch (ex) { }
 
+// The *.js files in the working directory. Files that would replace a module go first, so the 10-name popup never hides them behind the count
+function readDiskModuleFiles() {
+    var files = [], known = {};
+    try { var cwdFiles = require('fs').readdirSync(process.cwd()); for (var cf = 0; cf < cwdFiles.length; ++cf) { if (/\.js$/i.test(cwdFiles[cf])) { files.push(cwdFiles[cf]); } } } catch (ex) { }
+    try { var all = getModules(true); for (var k = 0; k < all.length; ++k) { known[all[k] + '.js'] = true; } } catch (ex) { }
+    return files.sort(function (a, b) { return ((known[b] === true) - (known[a] === true)) || ((a < b) ? -1 : ((a > b) ? 1 : 0)); });
+}
+// Disk module report, sent in coreinfo. The server derives the reason from the mode, compares with the device record and sets the device message
+// diskMode: 0 = no disk modules, 1 = only names without a module, 2 = disk replaces built-in (-allowDiskModules), 3 = 2 in a debug build, null = old agent.
+// As a function to prevent vars becoming globals
+(function () {
+    try {
+        var diskMode = (typeof getJSModuleDiskMode == 'function') ? getJSModuleDiskMode() : null, diskLoaded = [];
+        if ((diskMode >= 2) && (typeof getJSModulesLoaded == 'function')) { var loadedNow = getJSModulesLoaded(); for (var ln in loadedNow) { if (loadedNow[ln].source == 'disk') { diskLoaded.push(ln); } } }
+        if (diskMode == 2) {
+            // Only with the switch every later disk load goes into the report. A debug build loads from disk as its normal way of working, its start report marks it
+            try { process.on('diskModule', function (name) { try { if (meshCoreObj.dm.loaded.indexOf(name) < 0) { meshCoreObj.dm.loaded.push(name); meshCoreObjChanged(); } } catch (ex) { } }); } catch (ex) { }
+        }
+        // Mode 1 is script mode, which cannot connect to a server, so the directory is not read for it
+        meshCoreObj.dm = { mode: diskMode, files: (diskMode != 1) ? readDiskModuleFiles() : [], loaded: diskLoaded.sort() };
+        // The agent's own log gets the files too, its C code only logs the switch, setModulePath() and the disk loads that replace a module
+        if ((meshCoreObj.dm.files.length > 0) || (diskMode >= 2)) { try { console.rawLog('Disk modules: mode ' + diskMode + ', files: ' + (meshCoreObj.dm.files.join(', ') || 'none')); } catch (ex) { } }
+    } catch (ex) { }
+})();
+
 // Setup logged in user monitoring (THIS IS BROKEN IN WIN7)
 function onUserSessionChanged(user, locked) {
     userSession.enumerateUsers().then(function (users) {
@@ -4789,7 +4814,7 @@ function processConsoleCommand(cmd, args, rights, sessionid) {
                 var fin = '', f = '', availcommands = 'domain,translations,agentupdate,errorlog,msh,timerinfo,coreinfo,coreinfoupdate,coredump,service,fdsnapshot,fdcount,startupoptions,';
                 availcommands += 'alert,agentsize,versions,help,info,osinfo,args,print,type,dbkeys,dbget,dbset,dbdelete,dbcompact,eval,parseuri,httpget,wslist,plugin,wsconnect,wssend,wsclose,notify,';
                 availcommands += 'ls,ps,kill,netinfo,location,power,wakeonlan,setdebug,smbios,rawsmbios,toast,lock,users,openurl,getclip,setclip,log,cpuinfo,sysinfo,';
-                availcommands += 'apf,scanwifi,wallpaper,agentmsg,task,uninstallagent,display,openfile,installedapps';
+                availcommands += 'apf,scanwifi,wallpaper,agentmsg,task,uninstallagent,display,openfile,installedapps,modules';
                 if (require('os').dns != null) { availcommands += ',dnsinfo'; }
                 try { require('linux-dhcp'); availcommands += ',dhcp'; } catch (ex) { }
                 if (process.platform == 'win32') {
@@ -6305,7 +6330,53 @@ function processConsoleCommand(cmd, args, rights, sessionid) {
                 break;
             }
             case 'modules': {
-                response = JSON.stringify(addedModules);
+                var opts = {}, optsOk = true;
+                for (var i = 0; i < args['_'].length; ++i) {
+                    var arg = ('' + args['_'][i]).toLowerCase();
+                    for (var j = 0; j < arg.length; ++j) { if ('elisdnr'.indexOf(arg[j]) >= 0) { opts[arg[j]] = true; } else { optsOk = false; } }
+                }
+                if (!optsOk) {
+                    response = "Proper usage: modules [options]\r\n  Lists all modules: source, version, date, loaded, replaced by, ignored copy\r\n  l - Only loaded modules\r\n  i - Only modules built into the agent\r\n  s - Only modules added by the server\r\n  d - Only modules that come from a file in the working directory\r\n  n - Only native modules (C code in the agent); a JavaScript copy of the same name is never loaded and is shown as ignored copy\r\n  r - Only loaded modules that were replaced after they were loaded\r\n  e - Expanded JSON output\r\n  Options can be combined, for example: modules ls";
+                    break;
+                }
+                var hasLoaded = (typeof getJSModulesLoaded == 'function');
+                if (!hasLoaded && (opts.l || opts.r)) { response = "This agent version cannot show which modules are loaded."; break; }
+                // The date becomes ISO text and is left out when there is none, an undefined version is left out by JSON.stringify
+                var describe = function (x) { var r = { source: x.source, version: x.version }; if (x.date > 0) { r.date = new Date(x.date * 1000).toISOString(); } return r; };
+                var loaded = {}, names;
+                if (hasLoaded) {
+                    loaded = getJSModulesLoaded(); names = Object.keys(loaded);
+                    var all = [];
+                    try { all = getModules(true); } catch (ex) { } // An agent without native listing ignores the argument
+                    for (var i = 0; i < all.length; ++i) { if (loaded[all[i]] == null) { names.push(all[i]); } }
+                } else {
+                    names = addedModules.slice();
+                }
+                names.sort();
+                var anySource = (opts.i || opts.s || opts.d || opts.n), sourceOpt = { internal: 'i', server: 's', disk: 'd', native: 'n' }, lines = [], result = {};
+                for (var i = 0; i < names.length; ++i) {
+                    var name = names[i], info = loaded[name], now = null, out;
+                    if (hasLoaded) {
+                        try { now = getJSModuleInfo(name); } catch (ex) { }
+                        out = describe(info || now || { source: null, version: 0, date: 0 });
+                        out.loaded = (info != null);
+                        // The copy a new require() would get differs from the loaded one
+                        if ((info != null) && (now != null) && ((now.source != info.source) || (now.version != info.version) || ((now.date > 0) && (info.date > 0) && (now.date != info.date)))) { out['replaced by'] = describe(now); }
+                        // A native module with a JavaScript copy of the same name: require() never loads the copy
+                        if ((now != null) && (now.ignored != null)) { out['ignored copy'] = describe(now.ignored); }
+                    } else {
+                        var date = 0;
+                        try { date = getJSModuleDate(name); } catch (ex) { }
+                        out = describe({ source: 'server', date: date });
+                    }
+                    if (opts.l && (out.loaded !== true)) { continue; }
+                    if (opts.r && (out['replaced by'] == null)) { continue; }
+                    if (anySource && !opts[sourceOpt[out.source]]) { continue; }
+                    lines.push('  ' + JSON.stringify(name) + ': ' + JSON.stringify(out));
+                    result[name] = out;
+                }
+                if (opts.e) { response = JSON.stringify(result, null, '  '); }
+                else { response = (lines.length > 0) ? ('{\r\n' + lines.join(',\r\n') + '\r\n}') : '{}'; }
                 break;
             }
             case 'listservices': {
@@ -7554,6 +7625,17 @@ function sendPeriodicServerUpdate(flags, force) {
             } catch (ex) { sendConsoleText('Error getting idle time: ' + ex.toString());}
         }
 
+        // Read the working directory again, so a module file removed or added since the core started is reported without an agent restart.
+        // Every run with the switch and on an old agent, which both can load such a file. In release mode only when forced (connect, coreinfoupdate), so a removed file can be cleared. A debug build is left out, it loads from disk as its normal way of working.
+        if ((flags & 8) && (meshCoreObj.dm != null) && ((meshCoreObj.dm.mode == 2) || (meshCoreObj.dm.mode === null) || (force && (meshCoreObj.dm.mode == 0)))) {
+            var files = readDiskModuleFiles();
+            if (files.join('/') != meshCoreObj.dm.files.join('/')) {
+                meshCoreObj.dm.files = files;
+                try { console.rawLog('Disk modules: files changed: ' + (files.join(', ') || 'none')); } catch (ex) { }
+                if (!force) { meshCoreObjChanged(); }
+            }
+        }
+
         // Send available data right now
         if (force) {
             meshCoreObj = sortObjRec(meshCoreObj);
@@ -7603,7 +7685,7 @@ function meshCoreObjChangedEx() {
     }
 }
 
-function sortObjRec(o) { if ((typeof o != 'object') || (Array.isArray(o))) return o; for (var i in o) { if (typeof o[i] == 'object') { o[i] = sortObjRec(o[i]); } } return sortObj(o); }
+function sortObjRec(o) { if ((o == null) || (typeof o != 'object') || (Array.isArray(o))) return o; for (var i in o) { if (typeof o[i] == 'object') { o[i] = sortObjRec(o[i]); } } return sortObj(o); }
 function sortObj(o) { return Object.keys(o).sort().reduce(function (result, key) { result[key] = o[key]; return result; }, {}); }
 
 function onWebSocketClosed() { sendConsoleText("WebSocket #" + this.httprequest.index + " closed.", this.httprequest.sessionid); delete consoleWebSockets[this.httprequest.index]; }

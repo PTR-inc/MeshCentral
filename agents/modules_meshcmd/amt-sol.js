@@ -1,3 +1,4 @@
+/*! @module-version=1 */
 /** 
 * @description Serial-over-LAN Handling Module
 * @author Ylian Saint-Hilaire

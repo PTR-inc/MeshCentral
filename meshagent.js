@@ -101,6 +101,7 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
             delete parent.wsagents[obj.dbNodeKey];
             parent.parent.ClearConnectivityState(obj.dbMeshKey, obj.dbNodeKey, 1, null, { remoteaddrport: obj.remoteaddrport, name: obj.name });
         }
+        if (parent.diskModuleAgents[obj.dbNodeKey] == obj) { delete parent.diskModuleAgents[obj.dbNodeKey]; }
 
         // Remove this agent from the list of agents with bad web certificates
         if (obj.badWebCert) { delete parent.wsagentsWithBadWebCerts[obj.badWebCert]; }
@@ -845,6 +846,10 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                 // Device already exists, look if changes have occured
                 var changes = [], change = 0, log = 0;
                 if (device.agent == null) { device.agent = { ver: obj.agentInfo.agentVersion, id: obj.agentInfo.agentId, caps: obj.agentInfo.capabilities }; change = 1; }
+                // The disk module report of the last coreinfo, so the login warning has it before the core reports again. A record that is not an object is dropped
+                if (device.agent.dm != null) {
+                    if (typeof device.agent.dm == 'object') { setDiskModules(device.agent.dm); } else { parent.parent.debug('agent', 'Disk modules: dropped a device record entry that is not an object, ' + obj.nodeid); delete device.agent.dm; change = 1; }
+                }
                 if (device.rname != obj.agentInfo.computerName) { device.rname = obj.agentInfo.computerName; change = 1; changes.push('computer name'); }
                 if (device.agent.ver != obj.agentInfo.agentVersion) { device.agent.ver = obj.agentInfo.agentVersion; change = 1; changes.push('agent version'); }
                 if (device.agent.id != obj.agentInfo.agentId) { device.agent.id = obj.agentInfo.agentId; change = 1; changes.push('agent type'); }
@@ -1261,6 +1266,83 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
         return true;
     }
 
+    // Keeps the names that are safe to show, in the agent's order (files that would replace a module first), and counts the rest, so an oddly named file cannot hide a warning.
+    // With withPath a name may carry a folder, as a module loaded from another directory than the working directory does (a path in its id, or setModulePath()).
+    function filterDiskModuleNames(list, withPath) {
+        const rule = withPath ? /^[\w.\- \/\\:~()+@]{1,260}$/ : /^[\w.\- ]{1,64}$/;
+        var names = [], others = 0;
+        if (Array.isArray(list)) { for (var i = 0; (i < list.length) && (i < 1000); ++i) { if ((typeof list[i] == 'string') && rule.test(list[i])) { names.push(list[i]); } else { others++; } } others += Math.max(0, list.length - 1000); }
+        return { names: names, others: others };
+    }
+
+    // Writes a module warning into the device's event log, the same agentlog event the agent's own 'log' command gives. "{0}", "{1}" in the text are where the arguments go (one argument or an array)
+    // An empty first argument or a missing device group writes nothing
+    function logDiskModules(msgid, args, text) {
+        if (!Array.isArray(args)) { args = [args]; }
+        if ((args[0] === '') || (parent.meshes[obj.dbMeshKey] == null)) return;
+        for (var i = 0; i < args.length; i++) { text = text.split('{' + i + '}').join(args[i]); }
+        parent.parent.DispatchEvent(parent.CreateMeshDispatchTargets(obj.dbMeshKey, [obj.dbNodeKey]), obj, { etype: 'node', action: 'agentlog', nodeid: obj.dbNodeKey, domain: domain.id, msgid: msgid, msgArgs: args, msg: "[WARNING] " + text });
+    }
+
+    // The disk module state of this connection, the web server's list of agents that have one, and the device message (the bullet in the General tab, kept on obj.diskModulesBullet)
+    function setDiskModules(state) {
+        if (state == null) { delete obj.diskModules; if (parent.diskModuleAgents[obj.dbNodeKey] == obj) { delete parent.diskModuleAgents[obj.dbNodeKey]; } }
+        else { obj.diskModules = state; parent.diskModuleAgents[obj.dbNodeKey] = obj; }
+        var bullet = null;
+        if (state != null) { const t = parent.getDiskModulesText(state, 'bullet'); bullet = { msg: t.text, icon: 3, msgid: t.msgid, msgArgs: t.args }; }
+        const oldMsg = (obj.diskModulesBullet != null) ? obj.diskModulesBullet.msg : null, newMsg = (bullet != null) ? bullet.msg : null;
+        if (oldMsg === newMsg) return;
+        if (bullet == null) { delete obj.diskModulesBullet; if ((obj.sessions != null) && (obj.sessions.msg != null)) { delete obj.sessions.msg.diskmodules; } }
+        else { obj.diskModulesBullet = bullet; if (obj.sessions == null) { obj.sessions = {}; } if (obj.sessions.msg == null) { obj.sessions.msg = {}; } obj.sessions.msg.diskmodules = bullet; }
+        obj.updateSessions();
+    }
+
+    // The disk module report from coreinfo. The device record keeps the last one, so after a reconnect or a server restart nothing is repeated.
+    // The connection object gets the state for the login warning on every valid report. Returns 1 when the device record changed, the caller saves it.
+    function processDiskModulesReport(dm, device) {
+        // The core sends the disk mode (0, 2 or 3, null on an old agent without module handling) and the names. The reason is derived here, so no value of the report is taken on trust
+        if ((dm.mode !== null) && !(Number.isInteger(dm.mode) && (dm.mode >= 0) && (dm.mode <= 3))) { parent.parent.debug('agent', 'Disk modules: report with an invalid mode ignored, ' + obj.nodeid); return 0; }
+        const mode = dm.mode;
+        var files = filterDiskModuleNames(dm.files), loaded = filterDiskModuleNames(dm.loaded, true).names, state = null, reason = null;
+        if (mode == 2) { reason = 'allowdisk'; } else if (mode == 3) { reason = 'debug'; }
+        else if ((mode != 1) && ((files.names.length > 0) || (files.others > 0))) { reason = (mode == null) ? 'oldagent' : 'notloaded'; }   // In mode 0 and on an old agent there is only a warning while at least one file is there
+        if (reason != null) { state = { reason: reason, files: files.names, others: files.others, loaded: loaded }; }
+        setDiskModules(state);
+        const previous = (device.agent.dm != null) ? device.agent.dm : null, filesKey = function (x) { return (Array.isArray(x.files) ? x.files.join(',') : '') + '|' + (x.others || 0); };
+        const stateKey = function (x) { return (x == null) ? '' : (x.reason + '|' + filesKey(x) + '|' + (Array.isArray(x.loaded) ? x.loaded.join(',') : '')); };
+        if (stateKey(previous) === stateKey(state)) return 0;
+        parent.parent.debug('agent', 'Disk modules: ' + obj.nodeid + ' mode ' + mode + ', ' + ((state != null) ? state.reason : 'nothing to report') + ', ' + files.names.length + ' file(s), ' + files.others + ' other(s), ' + loaded.length + ' loaded' + ((previous == null) ? ', new' : ''));
+        if (state == null) { delete device.agent.dm; return 1; }
+        device.agent.dm = state;
+        const notify = function (text) { parent.parent.DispatchEvent(parent.CreateNodeDispatchTargets(obj.dbMeshKey, obj.dbNodeKey), obj, { etype: 'node', action: 'notify', nodeid: obj.dbNodeKey, tag: 'events', domain: domain.id, title: parent.getAgentDisplayName(obj), value: text.text, msgid: text.msgid, args: text.args, nolog: 1, id: Math.random() }); };
+        // A new state gets the full report. The event log line lists the files up to 3800 characters, the popup and the login warning show at most 10 (getDiskModulesText)
+        if ((previous == null) || (previous.reason != state.reason)) {
+            if (state.reason == 'oldagent') { logDiskModules(167, parent.formatDiskModulesList(state.files, state.others, 0, 3800), "Older Agent has module files in its working directory, loading=enabled: {0}"); }
+            if (state.reason == 'notloaded') { logDiskModules(171, parent.formatDiskModulesList(state.files, state.others, 0, 3800), "Agent has module files in its working directory, loading=disabled: {0}"); }
+            if (state.reason == 'allowdisk') { logDiskModules(170, parent.formatDiskModulesList(state.loaded, 0, 0, 3800) || "none", "Agent has loading module files enabled (-allowDiskModules). Currently loaded from disk: {0}"); }
+            if (state.reason == 'debug') { logDiskModules(168, "debug build", "Agent has loading module files enabled ({0})."); }
+            if ((state.reason == 'allowdisk') || (state.reason == 'debug')) { logDiskModules(172, parent.formatDiskModulesList(state.files, state.others, 0, 3800), "Agent has module files in its working directory: {0}"); }
+            notify(parent.getDiskModulesText(state, 'popup'));
+        } else if (filesKey(previous) != filesKey(state)) {
+            // Same state with a changed list: only new files are reported, fewer files write nothing. The device message and the login warning show the current list anyway
+            const added = state.files.filter(function (f) { return !Array.isArray(previous.files) || (previous.files.indexOf(f) < 0); });
+            const addedOthers = Math.max(0, (state.others || 0) - (previous.others || 0));
+            if ((added.length > 0) || (addedOthers > 0)) {
+                logDiskModules(177, [parent.formatDiskModulesList(added, addedOthers, 0, 1000), parent.formatDiskModulesList(state.files, state.others, 0, 2800)], "Agent has new module files in its working directory: {0}. All files: {1}"); // Both lists together stay under the 4096 of an agent log line
+                notify(parent.getDiskModulesText({ reason: 'added', files: added, others: addedOthers }, 'popup'));
+            }
+        }
+        // A module loaded from disk since the last report gets its event line. A debug build gets no popup for it, that is its normal way of working
+        const loadedBefore = ((previous != null) && Array.isArray(previous.loaded)) ? previous.loaded : [];
+        for (var i = 0; i < state.loaded.length; i++) {
+            if (loadedBefore.indexOf(state.loaded[i]) >= 0) continue;
+            const name = state.loaded[i];
+            logDiskModules(169, name, "Agent loaded module '{0}'");
+            if (state.reason == 'allowdisk') { notify(parent.getDiskModulesText({ reason: 'loaded', files: [name] }, 'popup')); }
+        }
+        return 1;
+    }
+
     // Process incoming agent JSON data
     function processAgentData(msg) {
         if (obj.agentInfo == null) return;
@@ -1570,7 +1652,7 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                         else if (command.type == 'help') { obj.sessions.help = command.value; }
                         else if (command.type == 'tcp') { obj.sessions.tcp = command.value; }
                         else if (command.type == 'udp') { obj.sessions.udp = command.value; }
-                        else if (command.type == 'msg') { obj.sessions.msg = command.value; }
+                        else if (command.type == 'msg') { obj.sessions.msg = command.value; if (obj.diskModulesBullet != null) { obj.sessions.msg.diskmodules = obj.diskModulesBullet; } } // The agent's list replaces the server's bullet, so it is put back
                         else if (command.type == 'app') { obj.sessions.app = command.value; }
                     }
 
@@ -2037,6 +2119,7 @@ module.exports.CreateMeshAgent = function (parent, db, ws, req, args, domain) {
                     if (!device.idletime) { device.idletime = 0; }
                     if (parseInt(device.idletime) != parseInt(command.idletime)) { /*changes.push('Idle Time');*/ device.idletime = parseInt(command.idletime); change = 1; } // Don't log idle time changes, this is too volatile.
                 }
+                if ((command.dm != null) && (typeof command.dm == 'object')) { if (processDiskModulesReport(command.dm, device) == 1) { change = 1; } } // Disk module report, its own event lines are written in processDiskModulesReport() so no log=1
 
                 // Push Messaging Token
                 if ((command.pmt != null) && (typeof command.pmt == 'string') && (device.pmt != command.pmt)) {

@@ -1,3 +1,4 @@
+/*! @module-version=1 */
 /** 
 * @description Intel AMT Redirection Transport Module - using Node
 * @author Ylian Saint-Hilaire

@@ -1,3 +1,4 @@
+/*! @module-version=1 */
 // Windows Update available updates lister via Windows Update Agent COM API.
 // Uses IUpdateSession -> IUpdateSearcher (async) to find updates not yet installed.
 

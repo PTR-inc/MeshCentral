@@ -3963,6 +3963,7 @@
                             var n = { text: message.event.value, title: message.event.title, icon: message.event.icon, titleid: message.titleid, msgid: message.msgid, args: message.args };
                             if (message.id != null) { n.id = message.id; }
                             if (message.event.tag != null) { n.tag = message.event.tag; }
+                            if (message.event.nodeid != null) { n.nodeid = message.event.nodeid; }
                             if (typeof message.maxtime == 'number') { n.maxtime = message.maxtime; }
                             addNotification(n);
                             break;
@@ -5379,7 +5380,10 @@
             for (var i in node.sessions.msg) {
                 var msg = i, icon = 5;
                 if (typeof node.sessions.msg[i].msg == 'string') { msg = node.sessions.msg[i].msg; }
-                if ((typeof node.sessions.msg[i].msgid == 'number') && (eventsMessageId[node.sessions.msg[i].msgid] != null)) { msg = eventsMessageId[node.sessions.msg[i].msgid]; }
+                if ((typeof node.sessions.msg[i].msgid == 'number') && (eventsMessageId[node.sessions.msg[i].msgid] != null)) {
+                    msg = eventsMessageId[node.sessions.msg[i].msgid];
+                    if (Array.isArray(node.sessions.msg[i].msgArgs)) { for (var j in node.sessions.msg[i].msgArgs) { msg = msg.split('{' + j + '}').join(node.sessions.msg[i].msgArgs[j]); } } // Not escaped here, the whole message is escaped below
+                }
                 if (typeof node.sessions.msg[i].icon == 'number') { icon = node.sessions.msg[i].icon; }
                 if ((icon < 1) || (icon > 9)) { icon = 5; }
                 x += '<table style=width:96%><td style=width:24px><div class=NotifyIconSmall' + icon + '></div><td><div style="border-radius:5px;background-color:#BBB;width:100%;padding:8px">' + EscapeHtml(msg) + '</div></table>';
@@ -16996,7 +17000,18 @@
             161: "Disabled Duo two-factor authentication",
             162: "Started messenger session \"{0}\" from {1} to {2}",
             163: "Removed device {0} from user group {1}",
-            164: "Create file: \"{0}\""
+            164: "Create file: \"{0}\"",
+            167: "[WARNING] Agent has module files in its working directory, loading=enabled: {0}",
+            168: "[WARNING] Agent has loading module files enabled ({0}).",
+            169: "[WARNING] Agent loaded module '{0}'",
+            170: "[WARNING] Agent has loading module files enabled (-allowDiskModules). Currently loaded from disk: {0}",
+            171: "[WARNING] Agent has module files in its working directory, loading=disabled: {0}",
+            172: "[WARNING] Agent has module files in its working directory: {0}",
+            173: "Agent has loading module files enabled (-allowDiskModules){0}",
+            174: "Agent has loading module files enabled (Debug build){0}",
+            175: "Agent has module files in its working directory, loading=enabled{0}",
+            176: "Agent has module files in its working directory, loading=disabled{0}",
+            177: "[WARNING] Agent has new module files in its working directory: {0}. All files: {1}"
         };
 
         var eventsShortMessageId = {
@@ -19714,6 +19729,7 @@
                 else if (n.tag == 'files') gotoDevice(n.nodeid, 13); // Files
                 else if (n.tag == 'intelamt') gotoDevice(n.nodeid, 14); // Intel AMT
                 else if (n.tag == 'console') gotoDevice(n.nodeid, 15); // Files
+                else if (n.tag == 'events') gotoDevice(n.nodeid, 16); // Events
                 else gotoDevice(n.nodeid, 10); // General
             } else {
                 if ((n.tag == 'backupcodes') && !xxdialogMode) { go(2); account_manageOtp(0); notificationDelete(id); } // 2FA backup codes
@@ -19795,7 +19811,18 @@
                 "Invalid message",
                 "Message succesfully sent.",
                 "Message error",
-                "Message error: {0}"
+                "Message error: {0}",
+                "Security Warning: Agent has loading module files enabled (-allowDiskModules){0}", // 35
+                "Security Warning: Agent has loading module files enabled (Debug build){0}",
+                "Security Warning: Agent has module files in its working directory, loading=disabled{0}",
+                "Security Warning: Agent has module files in its working directory, loading=enabled{0}",
+                "Security Warning: Agent loaded module '{0}'",
+                "Agent {0} has loading module files enabled (-allowDiskModules){1}", // 40
+                "Agent {0} has loading module files enabled (Debug build){1}",
+                "Agent {0} has module files in its working directory, loading=disabled{1}",
+                "Agent {0} has module files in its working directory, loading=enabled{1}",
+                "{0} more agents report. Type \"modules w\" in My Server > Console for the full list.", // 44
+                "Security Warning: New module files in the agent's working directory{0}" // 45
             ];
             if (typeof n.titleid == 'number') { try { n.title = translatedTitles[n.titleid]; } catch (ex) {} }
             if (typeof n.msgid == 'number') { try { n.text = translatedMessages[n.msgid]; if (Array.isArray(n.args)) { n.text = format(n.text, n.args[0], n.args[1], n.args[2], n.args[3], n.args[4], n.args[5]); } } catch (ex) { } }

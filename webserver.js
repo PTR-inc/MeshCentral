@@ -351,6 +351,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
     // Main lists
     obj.wsagents = {};                // NodeId --> Agent
     obj.wsagentsWithBadWebCerts = {}; // NodeId --> Agent
+    obj.diskModuleAgents = {};        // NodeId --> Agent, the connected agents with a disk module report, for the login warning and "modules w"
     obj.wsagentsDisconnections = {};
     obj.wsagentsDisconnectionsTimer = null;
     obj.duplicateAgentsLog = {};
@@ -10149,6 +10150,36 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if (mesh != null) { targets.push(mesh._id); for (var i in mesh.links) { if (i.startsWith('ugrp/')) { targets.push(i); } } }
         for (var i in obj.userGroups) { const g = obj.userGroups[i]; if ((g != null) && (g.links != null) && (g.links[nodeid] != null)) { targets.push(i); } }
         return targets;
+    }
+
+    obj.getAgentDisplayName = function (agent) { return agent.name || ((agent.agentInfo != null) ? agent.agentInfo.computerName : null) || agent.dbNodeKey; }
+
+    // The disk module warning texts in one place, by reason and form: the live popup and the login notification use the pages' translatedMessages ids, the device message bullet the eventsMessageId ones
+    const diskModulesTexts = {
+        allowdisk: { popup: [35, "Security Warning: Agent has loading module files enabled (-allowDiskModules){0}"], login: [40, "Agent {0} has loading module files enabled (-allowDiskModules){1}"], bullet: [173, "Agent has loading module files enabled (-allowDiskModules){0}"] },
+        debug: { popup: [36, "Security Warning: Agent has loading module files enabled (Debug build){0}"], login: [41, "Agent {0} has loading module files enabled (Debug build){1}"], bullet: [174, "Agent has loading module files enabled (Debug build){0}"] },
+        notloaded: { popup: [37, "Security Warning: Agent has module files in its working directory, loading=disabled{0}"], login: [42, "Agent {0} has module files in its working directory, loading=disabled{1}"], bullet: [176, "Agent has module files in its working directory, loading=disabled{0}"] },
+        oldagent: { popup: [38, "Security Warning: Agent has module files in its working directory, loading=enabled{0}"], login: [43, "Agent {0} has module files in its working directory, loading=enabled{1}"], bullet: [175, "Agent has module files in its working directory, loading=enabled{0}"] },
+        loaded: { popup: [39, "Security Warning: Agent loaded module '{0}'"] },
+        added: { popup: [45, "Security Warning: New module files in the agent's working directory{0}"] }
+    };
+
+    // The file list of a warning: the names that fit (a count of names for a popup, of characters for an event log line, 0 for no limit), then "and N other file(s)" for the rest and the unusable names
+    obj.formatDiskModulesList = function (files, others, maxNames, maxChars) {
+        const names = Array.isArray(files) ? files : [];
+        var shown = [], length = 0;
+        for (var i = 0; (i < names.length) && ((maxNames == 0) || (shown.length < maxNames)) && ((maxChars == 0) || ((length + names[i].length + 2) < maxChars)); i++) { shown.push(names[i]); length += names[i].length + 2; }
+        const rest = (names.length - shown.length) + (others || 0);
+        return shown.join(', ') + ((rest > 0) ? (((shown.length > 0) ? " and " : "") + rest + " other file(s)") : '');
+    }
+
+    // The warning text of a disk module state in one form ('popup', 'login' with the agent name, 'bullet'), with at most 10 file names. Returns { msgid, args, text }, the text being the English fallback
+    obj.getDiskModulesText = function (diskModules, form, agentName) {
+        const texts = diskModulesTexts[diskModules.reason] || diskModulesTexts.oldagent, entry = texts[form] || diskModulesTexts.oldagent[form];
+        var list = obj.formatDiskModulesList(diskModules.files, diskModules.others, 10, 0);
+        if (diskModules.reason != 'loaded') { list = (list != '') ? (': ' + list) : ''; }
+        const args = (form == 'login') ? [agentName, list] : [list];
+        return { msgid: entry[0], args: args, text: entry[1].split('{0}').join(args[0]).split('{1}').join(args[1]) };
     }
 
     // Clone a safe version of a user object, remove everything that is secret.

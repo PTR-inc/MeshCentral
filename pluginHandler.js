@@ -163,7 +163,10 @@ module.exports.pluginHandler = function (parent) {
                     if (modulesDir[i].toLowerCase().endsWith('.js')) {
                         var moduleName = modulesDir[i].substring(0, modulesDir[i].length - 3);
                         if (moduleName.endsWith('.min')) { moduleName = moduleName.substring(0, moduleName.length - 4); } // Remove the ".min" for ".min.js" files.
-                        var moduleData = ['try { addModule("', moduleName, '", "', obj.parent.escapeCodeString(obj.fs.readFileSync(obj.path.join(moduleDirPath, modulesDir[i])).toString('binary')), '"); addedModules.push("', moduleName, '"); } catch (e) { }\r\n'];
+                        const modulePath = obj.path.join(moduleDirPath, modulesDir[i]);
+                        const mod = obj.parent.buildAddModuleLine(moduleName, modulePath);
+                        obj.parent.meshCoreModules[moduleName] = { version: mod.version, date: mod.date };
+                        var moduleData = [mod.line];
 
                         // Merge this module
                         // NOTE: "smbios" module makes some non-AI Linux segfault, only include for IA platforms.

@@ -1,3 +1,4 @@
+/*! @module-version=1 */
 /*
 Copyright 2022 Intel Corporation
 @author Bryan Roe

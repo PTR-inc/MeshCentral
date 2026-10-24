@@ -1,3 +1,4 @@
+/*! @module-version=1 */
 /*
 Copyright 2019-2021 Intel Corporation
 

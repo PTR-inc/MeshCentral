@@ -8370,6 +8370,34 @@
       ]
     },
     {
+      "en": "Agent has loading module files enabled (-allowDiskModules){0}",
+      "xloc": [
+        "default.handlebars->121->2902",
+        "default3.handlebars->123->2907"
+      ]
+    },
+    {
+      "en": "Agent has loading module files enabled (Debug build){0}",
+      "xloc": [
+        "default.handlebars->121->2903",
+        "default3.handlebars->123->2908"
+      ]
+    },
+    {
+      "en": "Agent has module files in its working directory, loading=disabled{0}",
+      "xloc": [
+        "default.handlebars->121->2905",
+        "default3.handlebars->123->2910"
+      ]
+    },
+    {
+      "en": "Agent has module files in its working directory, loading=enabled{0}",
+      "xloc": [
+        "default.handlebars->121->2904",
+        "default3.handlebars->123->2909"
+      ]
+    },
+    {
       "bs": "Preskače se provjera heš agenta, ovo nije sigurno.",
       "ca": "La comprovació hash de l'agent s'està omet, això no és segur.",
       "cs": "Kontrola hash agenta se přeskakuje, není to bezpečné.",
@@ -8489,6 +8517,38 @@
       "xloc": [
         "default.handlebars->121->1071",
         "default3.handlebars->123->1067"
+      ]
+    },
+    {
+      "en": "Agent {0} has loading module files enabled (-allowDiskModules){1}",
+      "xloc": [
+        "default-mobile.handlebars->55->1149",
+        "default.handlebars->121->3544",
+        "default3.handlebars->123->3539"
+      ]
+    },
+    {
+      "en": "Agent {0} has loading module files enabled (Debug build){1}",
+      "xloc": [
+        "default-mobile.handlebars->55->1150",
+        "default.handlebars->121->3545",
+        "default3.handlebars->123->3540"
+      ]
+    },
+    {
+      "en": "Agent {0} has module files in its working directory, loading=disabled{1}",
+      "xloc": [
+        "default-mobile.handlebars->55->1151",
+        "default.handlebars->121->3546",
+        "default3.handlebars->123->3541"
+      ]
+    },
+    {
+      "en": "Agent {0} has module files in its working directory, loading=enabled{1}",
+      "xloc": [
+        "default-mobile.handlebars->55->1152",
+        "default.handlebars->121->3547",
+        "default3.handlebars->123->3542"
       ]
     },
     {
@@ -70515,6 +70575,54 @@
       ]
     },
     {
+      "en": "Security Warning: Agent has loading module files enabled (-allowDiskModules){0}",
+      "xloc": [
+        "default-mobile.handlebars->55->1144",
+        "default.handlebars->121->3539",
+        "default3.handlebars->123->3534"
+      ]
+    },
+    {
+      "en": "Security Warning: Agent has loading module files enabled (Debug build){0}",
+      "xloc": [
+        "default-mobile.handlebars->55->1145",
+        "default.handlebars->121->3540",
+        "default3.handlebars->123->3535"
+      ]
+    },
+    {
+      "en": "Security Warning: Agent has module files in its working directory, loading=disabled{0}",
+      "xloc": [
+        "default-mobile.handlebars->55->1146",
+        "default.handlebars->121->3541",
+        "default3.handlebars->123->3536"
+      ]
+    },
+    {
+      "en": "Security Warning: Agent has module files in its working directory, loading=enabled{0}",
+      "xloc": [
+        "default-mobile.handlebars->55->1147",
+        "default.handlebars->121->3542",
+        "default3.handlebars->123->3537"
+      ]
+    },
+    {
+      "en": "Security Warning: Agent loaded module '{0}'",
+      "xloc": [
+        "default-mobile.handlebars->55->1148",
+        "default.handlebars->121->3543",
+        "default3.handlebars->123->3538"
+      ]
+    },
+    {
+      "en": "Security Warning: New module files in the agent's working directory{0}",
+      "xloc": [
+        "default-mobile.handlebars->55->1154",
+        "default.handlebars->121->3549",
+        "default3.handlebars->123->3544"
+      ]
+    },
+    {
       "bs": "Sigurnosna provjera",
       "ca": "Revisió de seguretat",
       "de": "Sicherheitsprüfung",
@@ -91508,6 +91616,55 @@
       ]
     },
     {
+      "en": "[WARNING] Agent has loading module files enabled (-allowDiskModules). Currently loaded from disk: {0}",
+      "xloc": [
+        "default.handlebars->121->2899",
+        "default3.handlebars->123->2904"
+      ]
+    },
+    {
+      "en": "[WARNING] Agent has loading module files enabled ({0}).",
+      "xloc": [
+        "default.handlebars->121->2897",
+        "default3.handlebars->123->2902"
+      ]
+    },
+    {
+      "en": "[WARNING] Agent has module files in its working directory, loading=disabled: {0}",
+      "xloc": [
+        "default.handlebars->121->2900",
+        "default3.handlebars->123->2905"
+      ]
+    },
+    {
+      "en": "[WARNING] Agent has module files in its working directory, loading=enabled: {0}",
+      "xloc": [
+        "default.handlebars->121->2896",
+        "default3.handlebars->123->2901"
+      ]
+    },
+    {
+      "en": "[WARNING] Agent has module files in its working directory: {0}",
+      "xloc": [
+        "default.handlebars->121->2901",
+        "default3.handlebars->123->2906"
+      ]
+    },
+    {
+      "en": "[WARNING] Agent has new module files in its working directory: {0}. All files: {1}",
+      "xloc": [
+        "default.handlebars->121->2906",
+        "default3.handlebars->123->2911"
+      ]
+    },
+    {
+      "en": "[WARNING] Agent loaded module '{0}'",
+      "xloc": [
+        "default.handlebars->121->2898",
+        "default3.handlebars->123->2903"
+      ]
+    },
+    {
       "bs": "[[0]] pristupni token je: [[1]]",
       "ca": "El testimoni d'accés [[0]] és: [[1]]",
       "cs": "[[0]] přístupový token je: [[1]]",
@@ -94150,6 +94307,14 @@
       "xloc": [
         "default.handlebars->121->96",
         "default3.handlebars->123->94"
+      ]
+    },
+    {
+      "en": "{0} more agents report. Type \\\"modules w\\\" in My Server > Console for the full list.",
+      "xloc": [
+        "default-mobile.handlebars->55->1153",
+        "default.handlebars->121->3548",
+        "default3.handlebars->123->3543"
       ]
     },
     {
