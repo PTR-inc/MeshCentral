@@ -108,6 +108,12 @@ for GUI_UID in $(gui_uids); do
     /bin/launchctl bootout "gui/\${GUI_UID}" "/Library/LaunchAgents/\${SERVICENAME}-launchagent.plist" >/dev/null 2>&1 || true
     /bin/launchctl bootstrap "gui/\${GUI_UID}" "/Library/LaunchAgents/\${SERVICENAME}-launchagent.plist" >/dev/null 2>&1 || true
 done
+
+# Copied here instead of shipped in the payload, because Installer would give an existing /Applications the payload's owner and mode.
+# The app hands its script to root, so it must be root-owned.
+if [ -d "\${INSTALLDIR}/Uninstall.app" ]; then
+    rm -rf ###UNINSTALLAPP### && mkdir -p ###UNINSTALLDIR### && ditto "\${INSTALLDIR}/Uninstall.app" ###UNINSTALLAPP### && chown -R root:wheel ###UNINSTALLAPP### || true
+fi
 `;
 
 const UNINSTALL = `#!/bin/bash
@@ -151,14 +157,92 @@ for SOCK in /tmp/meshagent-kvm-###SERVICENAME###-*.sock; do
     esac
 done
 sudo pkgutil --forget "###PKGID###" &> /dev/null
+sudo rm -rf ###UNINSTALLAPP### &> /dev/null
+sudo rmdir ###UNINSTALLDIR### &> /dev/null
 echo "###SERVICENAME### was uninstalled."
+`;
+
+// Names reach AppleScript as arguments, so quotes in them cannot break the uninstall app's dialogs
+const UNINSTALL_APP_LAUNCHER = `#!/bin/bash
+RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
+NAME=###DISPLAYNAMEQ###
+EXE=###EXECUTABLENAMEQ###
+
+/usr/bin/osascript - "Remove \${NAME} from this computer?" "\${NAME}" <<'EOF' >/dev/null || exit 0
+on run argv
+    activate
+    display dialog (item 1 of argv) with title (item 2 of argv) buttons {"Cancel", "Remove"} default button "Remove" cancel button "Cancel" with icon caution
+end run
+EOF
+
+# TCC records a bare executable by path and tccutil only resets bundle IDs, so the user removes the grants by hand
+pane() {
+    /usr/bin/open "x-apple.systempreferences:com.apple.preference.security?$1"
+    /usr/bin/osascript - "In the list that just opened, select \\"\${EXE}\\" and click the minus button. Then click Next." "\${NAME}: $2" <<'EOF'
+on run argv
+    activate
+    button returned of (display dialog (item 1 of argv) with title (item 2 of argv) buttons {"Skip the rest", "Next"} default button "Next")
+end run
+EOF
+}
+SKIPPED=1
+if [ "$(pane Privacy_ScreenCapture 'Screen Recording')" = "Next" ] && [ "$(pane Privacy_Accessibility 'Accessibility')" = "Next" ] && [ "$(pane Privacy_AllFiles 'Full Disk Access')" = "Next" ]; then
+    SKIPPED=0
+fi
+/usr/bin/osascript -e 'tell application "System Settings" to quit' >/dev/null 2>&1
+
+# The app is root-owned in /Applications, so the script runs in place and bash keeps it open while the script deletes the app
+OUT=$(/usr/bin/osascript - "\${RES}/uninstall.sh" "Enter your password to remove \${NAME}." <<'EOF' 2>&1
+on run argv
+    do shell script "/bin/bash " & quoted form of (item 1 of argv) & " 2>&1" with prompt (item 2 of argv) with administrator privileges
+end run
+EOF
+)
+RC=$?
+case "\${OUT}" in *"(-128)"*) exit 0 ;; esac
+
+if [ \${RC} -eq 0 ]; then MSG="\${NAME} was removed."; [ \${SKIPPED} -eq 1 ] && MSG="\${MSG} Remaining permissions can be removed in System Settings, Privacy & Security."; else MSG="Removing \${NAME} failed: $(printf '%s' "\${OUT}" | tail -3)"; fi
+/usr/bin/osascript - "\${MSG}" "\${NAME}" <<'EOF' >/dev/null
+on run argv
+    activate
+    display dialog (item 1 of argv) with title (item 2 of argv) buttons {"OK"} default button "OK"
+end run
+EOF
+exit 0
+`;
+
+// LaunchServices cannot tell the architecture of a script executable and asks for Rosetta on Apple silicon without the two LS keys
+const UNINSTALL_APP_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>CFBundleExecutable</key><string>uninstall</string>
+    <key>CFBundleIdentifier</key><string>###UNINSTALLAPPID###</string>
+    <key>CFBundleName</key><string>###UNINSTALLAPPNAMEX###</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>LSUIElement</key><true/>
+    <key>LSArchitecturePriority</key><array><string>arm64</string><string>x86_64</string></array>
+    <key>LSRequiresNativeExecution</key><true/>
+  </dict>
+</plist>
 `;
 
 function replaceTokens(str, tokens) {
     return str.split('###SERVICENAME###').join(tokens.serviceName)
         .split('###COMPANYNAME###').join(tokens.companyName)
         .split('###EXECUTABLENAME###').join(tokens.executableName)
-        .split('###PKGID###').join(tokens.pkgId);
+        .split('###PKGID###').join(tokens.pkgId)
+        .split('###UNINSTALLDIR###').join(shellQuote(tokens.uninstallDir))
+        .split('###UNINSTALLAPP###').join(shellQuote(tokens.uninstallDir + '/' + tokens.uninstallName))
+        .split('###UNINSTALLAPPID###').join(xmlEscape(tokens.pkgId.replace(/\.pkg$/, '.uninstall')))
+        .split('###UNINSTALLAPPNAMEX###').join(xmlEscape(tokens.uninstallName.replace(/\.app$/, '')))
+        .split('###DISPLAYNAMEQ###').join(shellQuote(tokens.displayName))
+        .split('###EXECUTABLENAMEQ###').join(shellQuote(tokens.executableName));
+}
+
+function shellQuote(str) {
+    return "'" + String(str).split("'").join("'\\''") + "'";
 }
 
 function xmlEscape(str) {
@@ -340,83 +424,134 @@ async function createXarPackage(paths) {
     return Buffer.concat([header, compressedToc, tocChecksum].concat(heapParts));
 }
 
+// Without p.payloadRoot this builds a payload-free package that only runs its scripts
+async function buildFlatPackage(tmpRoot, p) {
+    const basePkg = path.join(tmpRoot, 'internal.pkg');
+    const resourcesDir = path.join(tmpRoot, 'Resources');
+    await fsp.mkdir(basePkg, { recursive: true });
+    await fsp.mkdir(resourcesDir, { recursive: true });
+
+    await fsp.copyFile(p.backgroundPath || path.join(__dirname, 'agents', 'macosinstallerbackground.png'), path.join(resourcesDir, 'background'));
+
+    let installKBytes = 0, payloadXml = '';
+    if (p.payloadRoot) {
+        const payloadStats = await walk(p.payloadRoot);
+        installKBytes = Math.ceil(payloadStats.bytes / 1000);
+        await createPayload(p.payloadRoot, path.join(basePkg, 'Payload'));
+        await createBom(p.payloadRoot, path.join(basePkg, 'Bom'));
+        payloadXml = '  <payload installKBytes="' + installKBytes + '" numberOfFiles="' + payloadStats.files + '"/>\n';
+    }
+
+    let scriptsXml = '';
+    for (const name of ['preinstall', 'postinstall']) {
+        if (fs.existsSync(path.join(p.scriptsRoot, name))) {
+            await chmodIfExists(path.join(p.scriptsRoot, name), 0o755);
+            scriptsXml += '    <' + name + ' file="./' + name + '"/>\n';
+        }
+    }
+    await createPayload(p.scriptsRoot, path.join(basePkg, 'Scripts'));
+
+    const packageInfo = '<pkg-info format-version="2" identifier="' + xmlEscape(p.identifier) + '" version="1.0" install-location="/" relocatable="false" auth="root">\n'
+        + payloadXml
+        + '  <scripts>\n'
+        + scriptsXml
+        + '  </scripts>\n'
+        + '</pkg-info>\n';
+    await fsp.writeFile(path.join(basePkg, 'PackageInfo'), packageInfo);
+
+    const distribution = '<?xml version="1.0" encoding="utf-8"?>\n'
+        + '<installer-script minSpecVersion="1.000000">\n'
+        + '    <title>' + xmlEscape(p.title) + '</title>\n'
+        + '    <options customize="always" allow-external-scripts="no" rootVolumeOnly="true"/>\n'
+        + '    <background file="background" alignment="topleft" scaling="tofit"/>\n'
+        + '    <welcome language="en-US" mime-type="text/plain"><![CDATA[' + p.welcome.split(']]>').join(']]]]><![CDATA[>') + ']]></welcome>\n'
+        + '    <choices-outline>\n'
+        + '        <line choice="choice65"/>\n'
+        + '    </choices-outline>\n'
+        + '    <choice id="choice65" title="' + xmlEscape(p.title) + '">\n'
+        + '        <pkg-ref id="internal.pkg"/>\n'
+        + '    </choice>\n'
+        + '    <pkg-ref id="internal.pkg" installKBytes="' + installKBytes + '" version="1.0" auth="Root">#internal.pkg</pkg-ref>\n'
+        + '    <options hostArchitectures="arm64,x86_64"/>\n'
+        + '</installer-script>\n';
+    await fsp.writeFile(path.join(tmpRoot, 'Distribution'), distribution);
+
+    return createXarPackage([basePkg, resourcesDir, path.join(tmpRoot, 'Distribution')]);
+}
+
+async function writeUninstallApp(appDir, tokens) {
+    const contents = path.join(appDir, 'Contents');
+    await fsp.mkdir(path.join(contents, 'MacOS'), { recursive: true });
+    await fsp.mkdir(path.join(contents, 'Resources'), { recursive: true });
+    await fsp.writeFile(path.join(contents, 'Info.plist'), replaceTokens(UNINSTALL_APP_PLIST, tokens));
+    await fsp.writeFile(path.join(contents, 'MacOS', 'uninstall'), replaceTokens(UNINSTALL_APP_LAUNCHER, tokens));
+    await fsp.writeFile(path.join(contents, 'Resources', 'uninstall.sh'), replaceTokens(UNINSTALL, tokens).split('sudo ').join(''));
+    await chmodIfExists(path.join(contents, 'Info.plist'), 0o644);
+    await chmodIfExists(path.join(contents, 'MacOS', 'uninstall'), 0o755);
+    await chmodIfExists(path.join(contents, 'Resources', 'uninstall.sh'), 0o644);
+}
+
 async function createMacOSInstaller(opts) {
     const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'meshcentral-macos-pkg-'));
     try {
-        const payloadRoot = path.join(tmpRoot, 'payload');
-        const scriptsRoot = path.join(tmpRoot, 'scripts');
-        const basePkg = path.join(tmpRoot, 'internal.pkg');
-        const resourcesDir = path.join(tmpRoot, 'Resources');
+        const pkgIdSegment = pkgIdentifierSegment(opts.serviceName);
+        const pkgId = 'com.meshcentral.' + pkgIdSegment + '.pkg';
+        const tokens = {
+            serviceName: opts.serviceName, companyName: opts.companyName, executableName: opts.executableName, pkgId: pkgId, displayName: opts.displayName,
+            uninstallDir: '/Applications/' + String(opts.displayName).split('/').join('-'),
+            uninstallName: 'Uninstall ' + String(opts.serviceName).split('/').join('-') + '.app'
+        };
+
+        // The uninstaller runs the Uninstall.command steps as root from Installer, so sudo is dropped
+        const uninstallRoot = path.join(tmpRoot, 'uninstall');
+        const uninstallScripts = path.join(uninstallRoot, 'scripts');
+        await fsp.mkdir(uninstallScripts, { recursive: true });
+        await fsp.writeFile(path.join(uninstallScripts, 'postinstall'), replaceTokens(UNINSTALL, tokens).split('sudo ').join(''));
+        const uninstallPkg = await buildFlatPackage(uninstallRoot, {
+            scriptsRoot: uninstallScripts,
+            identifier: 'com.meshcentral.' + pkgIdSegment + '.uninstall.pkg',
+            title: 'Uninstall ' + opts.displayName,
+            welcome: 'This will remove the mesh agent "' + opts.serviceName + '" from this computer.\n',
+            backgroundPath: opts.backgroundPath
+        });
+
+        const installRoot = path.join(tmpRoot, 'install');
+        const payloadRoot = path.join(installRoot, 'payload');
+        const scriptsRoot = path.join(installRoot, 'scripts');
         const installDir = path.join(payloadRoot, 'usr', 'local', 'mesh_services', opts.companyName, opts.serviceName);
         const launchDaemons = path.join(payloadRoot, 'Library', 'LaunchDaemons');
         const launchAgents = path.join(payloadRoot, 'Library', 'LaunchAgents');
-        const pkgId = 'com.meshcentral.' + pkgIdentifierSegment(opts.serviceName) + '.pkg';
-        const tokens = { serviceName: opts.serviceName, companyName: opts.companyName, executableName: opts.executableName, pkgId: pkgId };
 
         await fsp.mkdir(installDir, { recursive: true });
         await fsp.mkdir(launchDaemons, { recursive: true });
         await fsp.mkdir(launchAgents, { recursive: true });
-        await fsp.mkdir(basePkg, { recursive: true });
         await fsp.mkdir(scriptsRoot, { recursive: true });
-        await fsp.mkdir(resourcesDir, { recursive: true });
 
         await fsp.copyFile(opts.agentPath, path.join(installDir, opts.executableName));
         await fsp.writeFile(path.join(installDir, opts.executableName + '.msh'), opts.meshSettings);
+        await writeUninstallApp(path.join(installDir, 'Uninstall.app'), tokens);
         await fsp.writeFile(path.join(launchDaemons, opts.serviceName + '.plist'), replaceTokens(LAUNCH_DAEMON_PLIST, tokens));
         await fsp.writeFile(path.join(launchAgents, opts.serviceName + '-launchagent.plist'), replaceTokens(LAUNCH_AGENT_PLIST, tokens));
         await fsp.writeFile(path.join(scriptsRoot, 'preinstall'), replaceTokens(PREINSTALL, tokens));
         await fsp.writeFile(path.join(scriptsRoot, 'postinstall'), replaceTokens(POSTINSTALL, tokens));
 
-        if (opts.backgroundPath) {
-            await fsp.copyFile(opts.backgroundPath, path.join(resourcesDir, 'background'));
-        } else {
-            const backgroundPath = path.join(__dirname, 'agents', 'macosinstallerbackground.png');
-            await fsp.copyFile(backgroundPath, path.join(resourcesDir, 'background'));
-        }
-
         await chmodIfExists(path.join(installDir, opts.executableName), 0o755);
-        await chmodIfExists(path.join(scriptsRoot, 'preinstall'), 0o755);
-        await chmodIfExists(path.join(scriptsRoot, 'postinstall'), 0o755);
         await chmodIfExists(path.join(installDir, opts.executableName + '.msh'), 0o644);
         await chmodIfExists(path.join(launchDaemons, opts.serviceName + '.plist'), 0o644);
         await chmodIfExists(path.join(launchAgents, opts.serviceName + '-launchagent.plist'), 0o644);
 
-        const payloadStats = await walk(payloadRoot);
-        const installKBytes = Math.ceil(payloadStats.bytes / 1000);
-        await createPayload(payloadRoot, path.join(basePkg, 'Payload'));
-        await createPayload(scriptsRoot, path.join(basePkg, 'Scripts'));
-        await createBom(payloadRoot, path.join(basePkg, 'Bom'));
-
-        const packageInfo = '<pkg-info format-version="2" identifier="' + xmlEscape(pkgId) + '" version="1.0" install-location="/" relocatable="false" auth="root">\n'
-            + '  <payload installKBytes="' + installKBytes + '" numberOfFiles="' + payloadStats.files + '"/>\n'
-            + '  <scripts>\n'
-            + '    <preinstall file="./preinstall"/>\n'
-            + '    <postinstall file="./postinstall"/>\n'
-            + '  </scripts>\n'
-            + '</pkg-info>\n';
-        await fsp.writeFile(path.join(basePkg, 'PackageInfo'), packageInfo);
-
         const welcome = 'Welcome to the MeshCentral agent for MacOS\n\nThis installer will install the mesh agent for "' + opts.meshName + '" and allow the administrator to remotely monitor and control this computer over the internet. For more information, go to https://meshcentral.com.\n\nThis software is provided under Apache 2.0 license.\n';
-        const distribution = '<?xml version="1.0" encoding="utf-8"?>\n'
-            + '<installer-script minSpecVersion="1.000000">\n'
-            + '    <title>' + xmlEscape(opts.displayName) + '</title>\n'
-            + '    <options customize="always" allow-external-scripts="no" rootVolumeOnly="true"/>\n'
-            + '    <background file="background" alignment="topleft" scaling="tofit"/>\n'
-            + '    <welcome language="en-US" mime-type="text/plain"><![CDATA[' + welcome.split(']]>').join(']]]]><![CDATA[>') + ']]></welcome>\n'
-            + '    <choices-outline>\n'
-            + '        <line choice="choice65"/>\n'
-            + '    </choices-outline>\n'
-            + '    <choice id="choice65" title="' + xmlEscape(opts.displayName) + '">\n'
-            + '        <pkg-ref id="internal.pkg"/>\n'
-            + '    </choice>\n'
-            + '    <pkg-ref id="internal.pkg" installKBytes="' + installKBytes + '" version="1.0" auth="Root">#internal.pkg</pkg-ref>\n'
-            + '    <options hostArchitectures="arm64,x86_64"/>\n'
-            + '</installer-script>\n';
-        await fsp.writeFile(path.join(tmpRoot, 'Distribution'), distribution);
-
-        const pkgBuffer = await createXarPackage([basePkg, resourcesDir, path.join(tmpRoot, 'Distribution')]);
+        const pkgBuffer = await buildFlatPackage(installRoot, {
+            payloadRoot: payloadRoot,
+            scriptsRoot: scriptsRoot,
+            identifier: pkgId,
+            title: opts.displayName,
+            welcome: welcome,
+            backgroundPath: opts.backgroundPath
+        });
         return {
             pkg: pkgBuffer,
+            uninstallPkg: uninstallPkg,
             uninstall: replaceTokens(UNINSTALL, tokens)
         };
     } finally {
